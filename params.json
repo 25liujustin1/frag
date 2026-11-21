@@ -1,5 +1,5 @@
 {
-  "name": "mr-v7",
+  "name": "mr-v7.1",
   "upgrades": [
     "armor",
     "plating",
@@ -89,5 +89,11 @@
   "skirmish": true,
   "peekW": 0.6,
   "duckW": 2,
-  "coverW": 0.5
+  "coverW": 0.5,
+  "zoneSlack": -999,
+  "zoneDetour": 1.4,
+  "stuckWall": false,
+  "zoneOutsideFirst": true,
+  "dropGun": false,
+  "gunPref": 1.5
 }

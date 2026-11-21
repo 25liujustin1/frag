@@ -52,6 +52,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private stuckAt: V2 | null = null
+  private stuckAtT = -99
   private laserLostT = -1
   private sweep = 0
   private mode = "start"
@@ -264,7 +266,13 @@ export class Bot {
     const threatRecent = enemies.length > 0 || underFire || recentTracks.length > 0
     if (!this.escaping && me.hp < me.max_hp * P.escapeHpFrac && threatRecent) this.escaping = true
     if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
-    if (this.escaping && !outside) {
+    const zoneSlack = zoneGoal ? this.zoneSlack(obs, zoneGoal) : Infinity
+    if (zoneGoal && ((outside && P.zoneOutsideFirst) || zoneSlack < P.zoneSlack)) {
+      // the zone wins over everything: get inside (weapons keep firing at whatever we were shooting)
+      this.mode = outside ? "zone!" : "rotate!"
+      move = this.followTo(zoneGoal, pos, t)
+      boost = (outside || zoneSlack < P.zoneSlack / 2) && me.energy > 15
+    } else if (this.escaping && !outside) {
       this.mode = "escape"
       const threats = recentTracks.map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
       if (underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
@@ -373,6 +381,17 @@ export class Bot {
         this.pathT = -99 // force replan
         const n = this.nav.nearestWalkable(pos[0] + move[0] * 4, pos[1] + move[1] * 4, 2)
         if (n >= 0) this.nav.cost[n] += 3
+        // stuck at the same place again: wall off the area ahead so the planner routes around it
+        if (P.stuckWall && this.stuckAt && dist2(this.stuckAt, pos) < 8 && t - this.stuckAtT < 20) {
+          const cx = pos[0] + move[0] * 5, cy = pos[1] + move[1] * 5
+          for (let dy = -6; dy <= 6; dy += 2) for (let dx = -6; dx <= 6; dx += 2) {
+            const m = this.nav.nodeAt(cx + dx, cy + dy)
+            if (m >= 0) this.nav.cost[m] += 25
+          }
+          this.jumpUntil = t // stop jumping at it; walk around instead
+        }
+        this.stuckAt = [pos[0], pos[1]]
+        this.stuckAtT = t
       }
       this.stuckRef = [pos[0], pos[1]]
       this.stuckRefT = t
@@ -449,6 +468,23 @@ export class Bot {
   }
 
   // ------------------------------------------------------------------ goals
+
+  /**
+   * Seconds to spare: (time until the shrinking edge reaches where we stand) − (time to walk to the
+   * goal inside the next circle, with a detour allowance). Small or negative = start moving now.
+   */
+  private zoneSlack(obs: Observation, goal: V2): number {
+    const z = obs.zone, pos = obs.self.pos, t = obs.t
+    const travel = (dist2(pos, goal) * P.zoneDetour) / obs.self.stats.walk_speed
+    let tOut = Infinity
+    for (let tau = t; tau <= Math.max(z.shrink_end, t) + 0.01; tau += 1) {
+      const u = tau <= z.shrink_start ? 0 : clamp((tau - z.shrink_start) / Math.max(1e-6, z.shrink_end - z.shrink_start), 0, 1)
+      const cx = z.center[0] + (z.next_center[0] - z.center[0]) * u, cy = z.center[1] + (z.next_center[1] - z.center[1]) * u
+      const r = z.radius + (z.next_radius - z.radius) * u
+      if (Math.hypot(pos[0] - cx, pos[1] - cy) > r - 3) { tOut = tau - t; break }
+    }
+    return tOut - travel
+  }
 
   /** A point inside the circle the zone is shrinking to; null if we are already well inside. */
   private zoneGoal(obs: Observation): V2 | null {
@@ -660,7 +696,7 @@ export class Bot {
     if (empty >= 0) return { gain: pref + 1 }
     // both full: replace the worst non-gun weapon if this one is better
     let worst = -1, wp = Infinity
-    slots.forEach((w, i) => { if (w && w.kind !== "gun" && (P.weaponPref[w.kind] ?? 0) < wp) { wp = P.weaponPref[w.kind] ?? 0; worst = i } })
+    slots.forEach((w, i) => { if (!w || (w.kind === "gun" && !P.dropGun)) return; const pr = w.kind === "gun" ? P.gunPref : (P.weaponPref[w.kind] ?? 0); if (pr < wp) { wp = pr; worst = i } })
     if (worst < 0 || pref <= wp) return null
     if (slots[worst]?.kind === "laser" && (slots[worst]!.charge ?? 0) > 0) return null
     return { gain: pref - wp, drop: worst }
