@@ -52,6 +52,9 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private myKills = 0
+  ffa = false
+  ffaT = -1
   private ambushing = false
   private spotCache: { t: number; tid: number; spot: V2 | null } | null = null
   private resetUntil = -1
@@ -114,6 +117,10 @@ export class Bot {
       }
     }
     if (obs.offer) act.pick = this.pickUpgrade(obs.offer.choices.map((c) => c.id))
+    // ---- which game is this? In practice the house squad never kills itself, so before the zone can kill
+    // anyone (~125 s) every death is ours. A mech dying that we didn't kill means a free-for-all (finals).
+    for (const e of obs.events) if (e.type === "kill") this.myKills++
+    if (!this.ffa && P.ffaDetect && t < P.ffaDetectT && obs.alive + this.myKills <= (this.hello.config.match.mechs ?? 16) - P.ffaDeaths) { this.ffa = true; this.ffaT = t }
     // sounds that suggest an approaching or firing mech (most recent, nearest band first)
     for (const s of obs.sounds) {
       if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
@@ -137,7 +144,12 @@ export class Bot {
     // only they are targets: never wake up a fresh enemy mid-fight.
     const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory) }
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
-    const pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
+    let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
+    if (this.ffa && !fighting.length) {
+      // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
+      // (very close mechs), or fight it out in the endgame.
+      pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
+    }
     for (const m of pool) {
       const d = dist2(m.pos, pos)
       if (d > P.engageRange) continue
@@ -291,7 +303,7 @@ export class Bot {
     // escape: low HP + any recent threat → get out of sight and stay out until healed. Nothing else.
     const recentTracks = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < P.escapeMemory)
     const threatRecent = enemies.length > 0 || underFire || recentTracks.length > 0
-    if (!this.escaping && me.hp < me.max_hp * P.escapeHpFrac && threatRecent) this.escaping = true
+    if (!this.escaping && me.hp < me.max_hp * (this.ffa ? P.ffaEscapeHp : P.escapeHpFrac) && threatRecent) this.escaping = true
     if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
     const zoneSlack = zoneGoal ? this.zoneSlack(obs, zoneGoal) : Infinity
     const grab = P.grab && !outside && !this.escaping && t - this.lastDmgT > P.grabQuiet && me.hp > me.max_hp * P.grabMinHp ? this.grabGoal(obs, slots, pos, enemies) : null
@@ -480,7 +492,7 @@ export class Bot {
     act.jump = jump
     act.aim = [round3(wrap(aim[0])), round3(clamp(aim[1], me.stats.min_pitch, me.stats.max_pitch))]
     act.fire = fire
-    draw.label(`${this.mode} hp${me.hp.toFixed(0)} ${best}${target ? ` t${target.id}@${tgtDist.toFixed(0)}` : ""}`)
+    draw.label(`${this.ffa ? "FFA " : ""}${this.mode} hp${me.hp.toFixed(0)} ${best}${target ? ` t${target.id}@${tgtDist.toFixed(0)}` : ""}`)
     return act
   }
 

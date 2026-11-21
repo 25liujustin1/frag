@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9",
+  "name": "mr-v9.1",
   "upgrades": [
     "armor",
     "plating",
@@ -126,5 +126,12 @@
   "grabSafe": 45,
   "grabRatio": 0.8,
   "grabCubeV": 30,
-  "grabWeaponV": 40
+  "grabWeaponV": 40,
+  "ffaDetect": true,
+  "ffaDetectT": 125,
+  "ffaDeaths": 2,
+  "ffaWeakFrac": 1.01,
+  "ffaCloseRange": 60,
+  "ffaEndgameAlive": 4,
+  "ffaEscapeHp": 0.35
 }
