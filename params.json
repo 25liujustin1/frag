@@ -1,5 +1,5 @@
 {
-  "name": "mr-v8c",
+  "name": "mr-v8d",
   "upgrades": [
     "armor",
     "plating",
@@ -101,7 +101,7 @@
   "pushHp": 450,
   "pushMinSelfHp": 0.3,
   "pushRange": 60,
-  "boostBursts": false,
+  "boostBursts": true,
   "burstChance": 0.25,
   "resetMax": 0,
   "resetHpFrac": 0.9,
@@ -115,8 +115,8 @@
   "spotArrive": 5,
   "spotFlankW": 0,
   "spotStaggerW": 0,
-  "ambush": true,
-  "opener": true,
+  "ambush": false,
+  "opener": false,
   "unawareAngle": 1.2,
   "prechargeDist": 70
 }
