@@ -52,6 +52,10 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private spotCache: { t: number; tid: number; spot: V2 | null } | null = null
+  private resetUntil = -1
+  private burstT = 0
+  private bursting = false
   private stuckAt: V2 | null = null
   private stuckAtT = -99
   private laserLostT = -1
@@ -254,8 +258,15 @@ export class Bot {
     const zoneGoal = this.zoneGoal(obs)
     const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
     const lowHp = me.hp < me.max_hp * P.retreatHpFrac
+    // push: the target is nearly dead and nobody else is shooting at us → commit to the kill
+    const otherShooters = enemies.filter((m) => m.id !== target?.id && engaged(m.id)).length
+    const pushing = !!target && target.kind === "mech" && P.push && otherShooters === 0 && me.hp > me.max_hp * P.pushMinSelfHp &&
+      ((target.hp ?? 1e9) < (target.max_hp ?? 1400) * P.pushHpFrac || (target.hp ?? 1e9) < P.pushHp)
+    if (pushing) this.retreating = false
     if (this.retreating && me.hp > me.max_hp * P.reengageHpFrac && odds > 1) this.retreating = false
-    if ((lowHp || odds < P.retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
+    if (!pushing && (lowHp || odds < P.retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
+    // reset after a kill: heal up in cover before the next hunter arrives
+    if (obs.events.some((e) => e.type === "kill")) this.resetUntil = t + P.resetMax
 
     let move: V2 = [0, 0]
     let boost = false
@@ -306,8 +317,39 @@ export class Bot {
         if (w.kind === "lightning") return tgtDist < w.stats.range && me.energy > 10
         return w.cooldown <= 0.3
       })
-      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready)
+      if (pushing) {
+        // close in to where our gun can't miss, unless they carry lightning and we don't
+        this.mode = "push"
+        band = tw.includes("lightning") && iLight < 0 ? [Math.max(band[0], 50), Math.max(band[1], 70)] : [Math.min(band[0], 15), Math.min(band[1], P.pushRange)]
+      }
+      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready || pushing)
+      if (P.posScore) {
+        const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+        const spot = this.fightSpot(pos, target, threats, band, ready, obs)
+        if (spot && Math.hypot(spot[0] - pos[0], spot[1] - pos[1]) > P.spotArrive) {
+          // head for the better spot, keeping a little sideways jink so we're not a straight-line target
+          const f = this.followTo(spot, pos, t)
+          move = [f[0] * 0.85 + move[0] * 0.35, f[1] * 0.85 + move[1] * 0.35]
+          this.mode = "reposition"
+        }
+      }
       if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
+      if (pushing && tgtDist > band[1] && me.energy > P.energyReserve) boost = true // chase
+      // short boost bursts while dodging, like the house bots (not while charging the laser)
+      if (!boost && P.boostBursts && me.energy > P.energyReserve + 30 && !(laserCharging(slots))) {
+        if (t > this.burstT) { this.bursting = this.rng.next() < P.burstChance; this.burstT = t + this.rng.range(0.6, 1.4) }
+        boost = this.bursting
+      }
+    } else if (t < this.resetUntil && me.hp < me.max_hp * P.resetHpFrac && !outside && enemies.length === 0) {
+      // reset: pick up cubes close by, otherwise sit in a sheltered spot and heal
+      this.mode = "reset"
+      let cube: V3 | null = null, cd = P.resetCubeRange
+      for (const c of this.cubeMem.values()) { const d = dist2(c, pos); if (d < cd && this.reachable(c)) { cd = d; cube = c } }
+      if (cube) move = this.followTo(cube, pos, t)
+      else {
+        const h = this.holdSpot(obs, pos)
+        move = h && Math.hypot(h.x - pos[0], h.y - pos[1]) > 3 ? this.followTo([h.x, h.y], pos, t) : [0, 0]
+      }
     } else {
       // loot or rotate
       const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
@@ -816,6 +858,74 @@ export class Bot {
   }
 
   /** Nearest reachable spot (≤ 40 m) hidden from every threat eye, inside the zone. */
+  /**
+   * Where to fight from. Scores nearby reachable spots on: how many enemies can see it (ideally only
+   * the target, and only when we're ready to shoot), a clear shot at the target in our range band,
+   * covered ways out (dead ends and corners are penalised), and zone safety (including the edge
+   * closing behind us). Re-evaluated every 0.5 s.
+   */
+  private fightSpot(pos: V3, target: ActorObs, threats: V3[], band: number[], ready: boolean, obs: Observation): V2 | null {
+    if (this.spotCache && obs.t - this.spotCache.t < 0.5 && this.spotCache.tid === target.id) return this.spotCache.spot
+    const z = obs.zone, t = obs.t
+    const tc: V3 = [target.pos[0], target.pos[1], target.pos[2] + 4.5]
+    const te: V3 = [target.pos[0], target.pos[1], target.pos[2] + 8]
+    // the zone radius ~10 s from now (shrinking or not), used as the safe limit
+    const u = t + 10 <= z.shrink_start ? 0 : clamp((t + 10 - z.shrink_start) / Math.max(1e-6, z.shrink_end - z.shrink_start), 0, 1)
+    const zc: V2 = [z.center[0] + (z.next_center[0] - z.center[0]) * u, z.center[1] + (z.next_center[1] - z.center[1]) * u]
+    const zr = z.radius + (z.next_radius - z.radius) * u
+    const sees = (e: V3, x: number, y: number, gz: number) => this.r.los(e[0], e[1], e[2], x, y, gz + 4.5, 1) || this.r.los(e[0], e[1], e[2], x, y, gz + 8.5, 1)
+    let best: V2 | null = null, bs = Infinity
+    for (const R of [0, 7, 14, 22, 32]) {
+      for (let k = 0; k < (R ? 12 : 1); k++) {
+        const a = (k / 12) * Math.PI * 2 + R * 0.1
+        const x = pos[0] + Math.cos(a) * R, y = pos[1] + Math.sin(a) * R
+        if (R > 0 && (!this.nav.isMain(this.nav.nodeAt(x, y)) || !this.lineClear(pos[0], pos[1], x, y))) continue
+        const dz = Math.hypot(x - zc[0], y - zc[1])
+        if (dz > zr - 6) continue
+        const gz = this.r.groundAt(x, y)
+        let seenBy = 0
+        for (const th of threats) if (sees(th, x, y, gz)) seenBy++
+        const shot = this.r.los(x, y, gz + 7, tc[0], tc[1], tc[2], 1)
+        const tSees = sees(te, x, y, gz)
+        const d = Math.hypot(x - tc[0], y - tc[1])
+        let s = 0
+        s += P.spotSeenW * Math.max(0, seenBy - (shot ? 1 : 0)) // extra enemies with eyes on us
+        if (ready && !shot) s += P.spotNoShotW
+        if (!ready && tSees) s += P.spotExposedW
+        s += d < band[0] ? (band[0] - d) / 15 : d > band[1] ? (d - band[1]) / 15 : 0
+        // covered ways out: points 15 m away, walkable, hidden from every threat
+        let exits = 0
+        for (let q = 0; q < 8 && exits < 3; q++) {
+          const b = (q / 8) * Math.PI * 2, ex = x + Math.cos(b) * 15, ey = y + Math.sin(b) * 15
+          if (!this.nav.isMain(this.nav.nodeAt(ex, ey)) || Math.hypot(ex - zc[0], ey - zc[1]) > zr - 6) continue
+          const egz = this.r.groundAt(ex, ey)
+          let hidden = true
+          for (const th of threats) if (sees(th, ex, ey, egz)) { hidden = false; break }
+          if (hidden) exits++
+        }
+        s += exits === 0 ? P.spotDeadEndW : exits === 1 ? P.spotDeadEndW / 3 : 0
+        s += Math.max(0, dz - (zr - 25)) * 0.15 // hugging the edge of the zone
+        s += R * P.spotTravelW
+        // never between enemies: the widest angle between any two threat directions (π = sandwiched)
+        if (threats.length >= 2) {
+          let spread = 0
+          const near: { a: number; d: number }[] = []
+          for (const th of threats) { const dd = Math.hypot(th[0] - x, th[1] - y); if (dd < 250) near.push({ a: Math.atan2(th[1] - y, th[0] - x), d: dd }) }
+          for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) spread = Math.max(spread, angDiff(near[i].a, near[j].a))
+          s += P.spotFlankW * Math.max(0, spread - Math.PI / 3) / (Math.PI * 2 / 3) // 0 at ≤60°, full at 180°
+          // make them arrive one at a time: reward a gap between the nearest and the next
+          if (near.length >= 2) {
+            near.sort((p, q) => p.d - q.d)
+            s -= P.spotStaggerW * Math.min(near[1].d - near[0].d, 40) / 40
+          }
+        }
+        if (s < bs) { bs = s; best = [x, y] }
+      }
+    }
+    this.spotCache = { t, tid: target.id, spot: best }
+    return best
+  }
+
   private findCover(pos: V3, threats: V3[], obs: Observation): V2 | null {
     let best: V2 | null = null, bd = Infinity
     const z = obs.zone
@@ -841,6 +951,8 @@ export class Bot {
     return best
   }
 }
+
+const laserCharging = (slots: (WeaponObs | null)[]) => slots.some((w) => w?.kind === "laser" && (w.charge ?? 0) > 0)
 
 const SOUND_THREAT = new Set(["gun", "laser", "laser_charge", "lightning", "mortar", "step", "boost", "jet", "reload"])
 

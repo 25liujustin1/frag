@@ -1,5 +1,5 @@
 {
-  "name": "mr-v7.1",
+  "name": "mr-v8a",
   "upgrades": [
     "armor",
     "plating",
@@ -95,5 +95,24 @@
   "stuckWall": false,
   "zoneOutsideFirst": true,
   "dropGun": false,
-  "gunPref": 1.5
+  "gunPref": 1.5,
+  "push": false,
+  "pushHpFrac": 0.35,
+  "pushHp": 450,
+  "pushMinSelfHp": 0.3,
+  "pushRange": 60,
+  "boostBursts": false,
+  "burstChance": 0.25,
+  "resetMax": 0,
+  "resetHpFrac": 0.9,
+  "resetCubeRange": 40,
+  "posScore": true,
+  "spotSeenW": 3,
+  "spotNoShotW": 2.5,
+  "spotExposedW": 2,
+  "spotDeadEndW": 3,
+  "spotTravelW": 0.04,
+  "spotArrive": 5,
+  "spotFlankW": 0,
+  "spotStaggerW": 0
 }
