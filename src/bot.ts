@@ -28,6 +28,7 @@ export class Bot {
   private pathIdx = 0
   private pathGoalNode = -1
   private pathT = -99
+  private pathPartial = false
   // state
   private t = 0
   private stuckRef: V2 = [0, 0]
@@ -539,8 +540,10 @@ export class Bot {
   private roomAlong(pos: V3, cx: number, cy: number, len: number): boolean {
     const nav = this.nav, r = this.r
     for (let s = 2; s <= len; s += 1.5) {
-      const c = r.cellOf(pos[0] + cx * s, pos[1] + cy * s)
+      const x = pos[0] + cx * s, y = pos[1] + cy * s
+      const c = r.cellOf(x, y)
       if (c < 0 || nav.clear[c] < 2.6) return false
+      if (s >= len - 1.5 && !nav.isMain(nav.nodeAt(x, y))) return false // don't step out of the connected map
     }
     return true
   }
@@ -552,8 +555,9 @@ export class Bot {
     if (gn < 0) return dirTo(pos, goal)
     if (gn !== this.pathGoalNode || t - this.pathT > 2.5 || this.pathIdx >= this.path.length) {
       const sn = nav.nearestWalkable(pos[0], pos[1], 6)
-      const res = sn >= 0 ? nav.astar(sn, gn, 20000) : null
+      const res = sn >= 0 ? nav.astar(sn, gn, this.pathPartial ? 60000 : 20000) : null
       this.path = res ? res.path : []
+      this.pathPartial = !res || !res.complete
       this.pathIdx = 0
       this.pathGoalNode = gn
       this.pathT = t
@@ -567,7 +571,13 @@ export class Bot {
       if (this.lineClear(pos[0], pos[1], nav.nodeX(path[k]), nav.nodeY(path[k]))) { pick = k; break }
     }
     const tx = nav.nodeX(path[pick]), ty = nav.nodeY(path[pick])
-    if (pick === path.length - 1 && Math.hypot(tx - pos[0], ty - pos[1]) < 2) return [0, 0]
+    if (pick === path.length - 1 && Math.hypot(tx - pos[0], ty - pos[1]) < 2) {
+      // end of the path: only stop if it actually reaches the goal; otherwise head straight for the
+      // goal (the stuck detector jumps/jets us out) and replan with a bigger budget right away
+      if (!this.pathPartial && Math.hypot(tx - goal[0], ty - goal[1]) < 6) return [0, 0]
+      this.pathT = -99
+      return dirTo(pos, goal)
+    }
     for (let k = 0; k < path.length && k < 40; k += 4) draw.point([nav.nodeX(path[k]), nav.nodeY(path[k]), pos[2]], "#40c0ff", 3)
     return dirTo(pos, [tx, ty])
   }

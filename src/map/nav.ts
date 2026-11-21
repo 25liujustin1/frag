@@ -29,6 +29,12 @@ export class Nav {
   private heapN = 0
   /** extra per-node cost multiplier (exposure, threat); 0 = none */
   readonly cost: Float32Array
+  /** connected-component id per node (-1 = not walkable) and the id of the largest one */
+  readonly comp: Int32Array
+  main = 0
+
+  /** Walkable and in the main connected area. */
+  isMain(n: number): boolean { return n >= 0 && this.comp[n] === this.main }
 
   constructor(r: Raster, p: NavParams) {
     this.r = r
@@ -61,6 +67,26 @@ export class Nav {
     for (let J = 0; J < this.ny; J++)
       for (let I = 0; I < this.nx; I++)
         this.walk[J * this.nx + I] = this.clear[2 * J * r.nx + 2 * I] >= p.minClear ? 1 : 0
+    // connected components (4-neighbour); `main` is the largest
+    this.comp = new Int32Array(n2).fill(-1)
+    let bestSize = 0
+    for (let s = 0, id = 0; s < n2; s++) {
+      if (!this.walk[s] || this.comp[s] >= 0) continue
+      let size = 0
+      const stack = [s]
+      this.comp[s] = id
+      while (stack.length) {
+        const u = stack.pop()!
+        size++
+        const ui = u % this.nx, uj = (u - ui) / this.nx
+        if (ui > 0 && this.walk[u - 1] && this.comp[u - 1] < 0) { this.comp[u - 1] = id; stack.push(u - 1) }
+        if (ui < this.nx - 1 && this.walk[u + 1] && this.comp[u + 1] < 0) { this.comp[u + 1] = id; stack.push(u + 1) }
+        if (uj > 0 && this.walk[u - this.nx] && this.comp[u - this.nx] < 0) { this.comp[u - this.nx] = id; stack.push(u - this.nx) }
+        if (uj < this.ny - 1 && this.walk[u + this.nx] && this.comp[u + this.nx] < 0) { this.comp[u + this.nx] = id; stack.push(u + this.nx) }
+      }
+      if (size > bestSize) { bestSize = size; this.main = id }
+      id++
+    }
     this.g = new Float32Array(n2)
     this.parent = new Int32Array(n2)
     this.stamp = new Uint32Array(n2)
@@ -79,14 +105,14 @@ export class Nav {
   nodeY(n: number): number { return this.r.minY + 2 * Math.floor(n / this.nx) }
 
   /** Nearest walkable node within `rad` nodes (spiral search), or -1. */
-  nearestWalkable(x: number, y: number, rad = 10): number {
+  nearestWalkable(x: number, y: number, rad = 10, mainOnly = true): number {
     const I0 = Math.round((x - this.r.minX) / 2), J0 = Math.round((y - this.r.minY) / 2)
     let best = -1, bd = Infinity
     for (let dJ = -rad; dJ <= rad; dJ++) for (let dI = -rad; dI <= rad; dI++) {
       const I = I0 + dI, J = J0 + dJ
       if (I < 0 || J < 0 || I >= this.nx || J >= this.ny) continue
       const n = J * this.nx + I
-      if (!this.walk[n]) continue
+      if (!this.walk[n] || (mainOnly && this.comp[n] !== this.main)) continue
       const d = dI * dI + dJ * dJ
       if (d < bd) { bd = d; best = n }
     }
