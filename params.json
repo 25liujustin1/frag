@@ -1,0 +1,22 @@
+{
+  "name": "mr-v1",
+  "upgrades": ["armor", "plating", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "gun_rate", "nanites", "servos", "gyros", "mortar_reload", "gun_velocity", "lightning_range", "gun_mag", "capacitor", "reactor", "jets", "sensors", "lightning_chain", "mortar_velocity", "mortar_splash", "laser_pierce"],
+  "weaponPref": { "laser": 3, "lightning": 2, "mortar": 1, "gun": 0 },
+  "bands": {
+    "laser": [100, 210],
+    "lightning": [12, 38],
+    "gun": [35, 90],
+    "mortar": [60, 170]
+  },
+  "zoneInnerFrac": 0.55,
+  "lootRange": 110,
+  "lootStopT": 200,
+  "crateRange": 70,
+  "crateStopT": 150,
+  "retreatHpFrac": 0.33,
+  "reengageHpFrac": 0.7,
+  "engageRange": 260,
+  "jinkMin": 0.25,
+  "jinkMax": 0.6,
+  "energyReserve": 25
+}
