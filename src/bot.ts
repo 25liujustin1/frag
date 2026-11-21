@@ -11,7 +11,7 @@ import { aimAt, lead, mortarSolve } from "./aim.ts"
 import { angDiff, clamp, dist2, dist3, log, Rng, wrap, yawTo, type V2, type V3 } from "./util.ts"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
-const P = JSON.parse(readFileSync(ROOT + "params.json", "utf8"))
+const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
 type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number }
 
@@ -29,6 +29,10 @@ export class Bot {
   private pathGoalNode = -1
   private pathT = -99
   private pathPartial = false
+  private crates = new Map<number, V3>()
+  private visited = new Map<string, number>()
+  private explore: V3 | null = null
+  private exploreT = -99
   // state
   private t = 0
   private stuckRef: V2 = [0, 0]
@@ -203,8 +207,9 @@ export class Bot {
 
     // crate shooting when calm (cubes + loot)
     let crateGoal: V3 | null = null
+    const needWeapon = iLaser < 0 && t < P.searchStopT
     if (!target && t < P.crateStopT && iGun >= 0 && !underFire) {
-      let bd = P.crateRange
+      let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
         if (d < bd && this.reachable(c.pos) && this.r.los(muzzle[0], muzzle[1], muzzle[2], c.pos[0], c.pos[1], c.pos[2] + 1.2)) { bd = d; crateGoal = c.pos as V3 }
@@ -246,9 +251,9 @@ export class Bot {
       if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
     } else {
       // loot or rotate
-      const loot = this.lootGoal(obs, slots, zoneGoal)
+      const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
       if (loot && !outside) {
-        this.mode = "loot"
+        this.mode = loot.takeId != null ? "loot" : loot.explore ? "explore" : "collect"
         move = this.followTo(loot.pos, pos, t)
         if (dist2(loot.pos, pos) < this.hello.config.loot.pickup_radius - 0.4 && loot.takeId != null) {
           act.take = loot.takeId
@@ -284,7 +289,7 @@ export class Bot {
       else if (t - this.heardT < 3) aim = [this.heardBearing, 0]
       else if (recent) aim = [yawTo(pos, recent.pos), 0]
       else if (this.mode === "hold" && this.hold && Math.hypot(move[0], move[1]) < 0.1) aim = [this.hold.face + 0.6 * Math.sin(t * 0.7), 0]
-      else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]), 0]
+      else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]) + (t < P.searchStopT ? P.scanAmp * Math.sin(t * 2.2) : 0), 0]
       else { this.sweep = wrap(this.sweep + 0.12); aim = [this.sweep, 0] }
     } else this.sweep = aim[0]
 
@@ -335,6 +340,9 @@ export class Bot {
     const seen = new Set<number>()
     for (const p of obs.pickups) { this.pickups.set(p.id, { kind: p.kind, pos: p.pos as V3 }); seen.add(p.id) }
     for (const [id, p] of this.pickups) if (!seen.has(id) && dist2(p.pos, obs.self.pos) < 35) this.pickups.delete(id)
+    const seenC = new Set<number>()
+    for (const c of obs.crates) { this.crates.set(c.id, c.pos as V3); seenC.add(c.id) }
+    for (const [id, c] of this.crates) if (!seenC.has(id) && dist2(c, obs.self.pos) < 35) this.crates.delete(id)
   }
 
   private bestWeapon(slots: (WeaponObs | null)[]): string {
@@ -377,7 +385,7 @@ export class Bot {
     return [c[0] + (pos[0] - c[0]) * k, c[1] + (pos[1] - c[1]) * k]
   }
 
-  private lootGoal(obs: Observation, slots: (WeaponObs | null)[], zoneGoal: V2 | null): { pos: V3; takeId?: number; drop?: number } | null {
+  private lootGoal(obs: Observation, slots: (WeaponObs | null)[], zoneGoal: V2 | null, search: boolean): { pos: V3; takeId?: number; drop?: number; explore?: boolean } | null {
     const pos = obs.self.pos as V3
     if (obs.t > P.lootStopT) return null
     // don't wander far if the zone needs us
@@ -385,13 +393,14 @@ export class Bot {
     const tLeft = z.shrink_end - obs.t
     const zoneTight = zoneGoal && dist2(zoneGoal, pos) / obs.self.stats.walk_speed > tLeft * 0.6
     if (zoneTight) return null
-    let best: { pos: V3; takeId?: number; drop?: number } | null = null
+    let best: { pos: V3; takeId?: number; drop?: number; explore?: boolean } | null = null
     let bs = -Infinity
+    const range = search ? P.lootRangeSearch : P.lootRange
     for (const [id, p] of this.pickups) {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.lootRange || !this.inZoneSoon(obs, p.pos) || !this.reachable(p.pos)) continue
+      if (d > range || !this.inZoneSoon(obs, p.pos) || !this.reachable(p.pos)) continue
       const s = take.gain * 60 - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
@@ -401,7 +410,37 @@ export class Bot {
       const s = 40 - d
       if (s > bs) { bs = s; best = { pos: c.pos as V3 } }
     }
-    return best
+    if (best || !search) return best
+    // no known weapon: walk toward a remembered crate (stop at shooting range) ...
+    let cd = P.crateSeekRange, crate: V3 | null = null
+    for (const c of this.crates.values()) {
+      const d = dist2(c, pos)
+      if (d < cd && this.reachable(c) && this.inZoneSoon(obs, c)) { cd = d; crate = c }
+    }
+    if (crate) return { pos: crate }
+    // ... or explore unvisited ground inside the coming zone
+    return this.exploreGoal(obs, pos)
+  }
+
+  /** Pick a point ~70 m away, inside the next zone, in the least-visited 50 m cell. */
+  private exploreGoal(obs: Observation, pos: V3): { pos: V3; explore: boolean } | null {
+    const cellKey = (x: number, y: number) => `${Math.floor(x / 50)},${Math.floor(y / 50)}`
+    this.visited.set(cellKey(pos[0], pos[1]), obs.t)
+    if (this.explore && dist2(this.explore, pos) > 12 && obs.t - this.exploreT < 20) return { pos: this.explore, explore: true }
+    const z = obs.zone
+    let best: V3 | null = null, bs = Infinity
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2 + this.rng.next() * 0.3
+      const x = pos[0] + Math.cos(a) * 70, y = pos[1] + Math.sin(a) * 70
+      const n = this.nav.nodeAt(x, y)
+      if (!this.nav.isMain(n) || dist2(z.next_center, [x, y]) > z.next_radius * 0.9) continue
+      const v = this.visited.get(cellKey(x, y))
+      const s = (v == null ? 0 : 100 - (obs.t - v)) + dist2(z.next_center, [x, y]) * 0.05
+      if (s < bs) { bs = s; best = [x, y, pos[2]] }
+    }
+    this.explore = best
+    this.exploreT = obs.t
+    return best ? { pos: best, explore: true } : null
   }
 
   /** Is a world point on walkable ground (not on a roof or in an enclosed courtyard)? */

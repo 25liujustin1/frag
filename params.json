@@ -1,5 +1,5 @@
 {
-  "name": "mr-v2",
+  "name": "mr-v4",
   "upgrades": ["armor", "plating", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "gun_rate", "nanites", "servos", "gyros", "mortar_reload", "gun_velocity", "lightning_range", "gun_mag", "capacitor", "reactor", "jets", "sensors", "lightning_chain", "mortar_velocity", "mortar_splash", "laser_pierce"],
   "weaponPref": { "laser": 3, "lightning": 2, "mortar": 1, "gun": 0 },
   "bands": {
@@ -13,8 +13,13 @@
   "lootStopT": 200,
   "crateRange": 70,
   "crateStopT": 150,
-  "retreatHpFrac": 0.33,
-  "retreatOdds": 0.6,
+  "searchStopT": 180,
+  "lootRangeSearch": 250,
+  "crateShootRange": 120,
+  "crateSeekRange": 200,
+  "scanAmp": 1.0,
+  "retreatHpFrac": 0.45,
+  "retreatOdds": 0.8,
   "reengageHpFrac": 0.7,
   "engageRange": 260,
   "jinkMin": 0.25,
