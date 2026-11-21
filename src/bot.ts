@@ -52,6 +52,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private ambushing = false
   private spotCache: { t: number; tid: number; spot: V2 | null } | null = null
   private resetUntil = -1
   private burstT = 0
@@ -162,6 +163,7 @@ export class Bot {
     const turn = me.stats.turn_rate * 0.05, pturn = me.stats.pitch_rate * 0.05
     const aimErr = (want: [number, number]) => Math.max(0, angDiff(want[0], myAim[0]) - turn) + 0.5 * Math.max(0, Math.abs(want[1] - myAim[1]) - pturn)
 
+    this.ambushing = false
     if (target && tgtCenter) {
       const tv = target.vel as V3
       const airborne = Math.abs(tv[2]) > 0.5
@@ -200,22 +202,36 @@ export class Bot {
       else if (mortarSol && !(tgtLos && tgtDist < 120 && iGun >= 0 && (slots[iGun]!.ammo ?? 0) > 0)) aim = [mortarSol.yaw, mortarSol.pitch]
       else aim = gunAim ?? hitscanAim
 
+      // ambush / surprise: is the target unaware of us (not fighting us, facing away)? Is it coming
+      // around a corner toward us while we're hidden?
+      const engagedT = this.tracks.get(target.id)
+      const aware = !!engagedT && (engagedT.hitUsT > t - P.engagedMemory || engagedT.weHitT > t - P.engagedMemory)
+      const facingUs = angDiff(target.aim?.[0] ?? 0, yawTo(target.pos, pos)) < P.unawareAngle
+      const unaware = target.kind === "mech" && !aware && !facingUs
+      const ux = (pos[0] - target.pos[0]) / Math.max(1, tgtDist), uy = (pos[1] - target.pos[1]) / Math.max(1, tgtDist)
+      const closing = tv[0] * ux + tv[1] * uy
+      this.ambushing = !!P.ambush && !!laser && target.kind === "mech" && !tgtLos && !underFire && tgtDist < laser.stats.range * 0.9 &&
+        me.hp > me.max_hp * 0.5 && (closing > 2 || tgtDist < 90) && !enemies.some((m) => m.id !== target.id && engaged(m.id))
+      // surprise opener: hold the gun (its sound warns them) until the laser has fired
+      const holdGun = !!P.opener && !!laser && unaware && (laserCharging || (laser.cooldown <= 0.05 && tgtLos))
       // gun
-      if (iGun >= 0 && gunAim) {
+      if (iGun >= 0 && gunAim && !holdGun) {
         const g = slots[iGun]!
         if (tgtLos && tgtDist < g.stats.range && (g.ammo ?? 0) > 0 && (g.reload ?? 0) <= 0 && aimErr(gunAim) < tol) fire[iGun] = true
       }
-      // laser: hold to charge, release when full and on target
+      // laser: hold to charge, release when full and on target. When ambushing, pre-charge out of
+      // sight and keep holding (up to just before the auto-fire limit) until the target steps out.
       if (laser) {
         const full = (laser.charge ?? 0) >= laser.stats.charge - 0.02
+        const autoFireSoon = (laser.charge ?? 0) >= laser.stats.charge + laser.stats.hold_s - 0.3
         if (laserCharging) {
           if (tgtLos) this.laserLostT = -1
           else if (this.laserLostT < 0) this.laserLostT = t
-          const lostLong = this.laserLostT >= 0 && t - this.laserLostT > 1.2
+          const lostLong = this.laserLostT >= 0 && t - this.laserLostT > 1.2 && !this.ambushing
           if (full && tgtLos && aimErr(hitscanAim) < tol) fire[iLaser] = false // release → fires
-          else if (lostLong) fire[iLaser] = false
+          else if (lostLong || autoFireSoon) fire[iLaser] = false
           else fire[iLaser] = true
-        } else if (laser.cooldown <= 0.05 && tgtLos && tgtDist < laser.stats.range * 0.97) {
+        } else if (laser.cooldown <= 0.05 && ((tgtLos && tgtDist < laser.stats.range * 0.97) || (this.ambushing && (tgtDist < P.prechargeDist || closing * 0.9 > tgtDist - P.prechargeDist)))) {
           fire[iLaser] = true
           this.laserLostT = -1
         }
@@ -333,6 +349,7 @@ export class Bot {
           this.mode = "reposition"
         }
       }
+      if (this.ambushing) { this.mode = "ambush"; move = [0, 0] } // hold still (silent), pre-aimed, laser charging
       if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
       if (pushing && tgtDist > band[1] && me.energy > P.energyReserve) boost = true // chase
       // short boost bursts while dodging, like the house bots (not while charging the laser)

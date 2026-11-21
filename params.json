@@ -1,5 +1,5 @@
 {
-  "name": "mr-v8b",
+  "name": "mr-v8c",
   "upgrades": [
     "armor",
     "plating",
@@ -113,6 +113,10 @@
   "spotDeadEndW": 3,
   "spotTravelW": 0.04,
   "spotArrive": 5,
-  "spotFlankW": 3,
-  "spotStaggerW": 1
+  "spotFlankW": 0,
+  "spotStaggerW": 0,
+  "ambush": true,
+  "opener": true,
+  "unawareAngle": 1.2,
+  "prechargeDist": 70
 }
