@@ -30,6 +30,7 @@ export class Bot {
   private pathT = -99
   private pathPartial = false
   private crates = new Map<number, V3>()
+  private cubeMem = new Map<number, V3>()
   private visited = new Map<string, number>()
   private explore: V3 | null = null
   private exploreT = -99
@@ -340,6 +341,9 @@ export class Bot {
     const seen = new Set<number>()
     for (const p of obs.pickups) { this.pickups.set(p.id, { kind: p.kind, pos: p.pos as V3 }); seen.add(p.id) }
     for (const [id, p] of this.pickups) if (!seen.has(id) && dist2(p.pos, obs.self.pos) < 35) this.pickups.delete(id)
+    const seenK = new Set<number>()
+    for (const c of obs.cubes) { this.cubeMem.set(c.id, c.pos as V3); seenK.add(c.id) }
+    for (const [id, c] of this.cubeMem) if (!seenK.has(id) && dist2(c, obs.self.pos) < 30) this.cubeMem.delete(id)
     const seenC = new Set<number>()
     for (const c of obs.crates) { this.crates.set(c.id, c.pos as V3); seenC.add(c.id) }
     for (const [id, c] of this.crates) if (!seenC.has(id) && dist2(c, obs.self.pos) < 35) this.crates.delete(id)
@@ -387,6 +391,20 @@ export class Bot {
 
   private lootGoal(obs: Observation, slots: (WeaponObs | null)[], zoneGoal: V2 | null, search: boolean): { pos: V3; takeId?: number; drop?: number; explore?: boolean } | null {
     const pos = obs.self.pos as V3
+    const calm = !obs.mechs.some((m) => m.kind === "mech")
+    // cubes (from kills, crates): worth a trip when nobody is in sight; clusters first
+    if (calm && obs.t < P.cubeStopT && !(zoneGoal && dist2(zoneGoal, pos) / obs.self.stats.walk_speed > (obs.zone.shrink_end - obs.t) * 0.6)) {
+      let bc: V3 | null = null, bcs = -Infinity
+      for (const c of this.cubeMem.values()) {
+        const d = dist2(c, pos)
+        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c)) continue
+        let n = 0
+        for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
+        const s = n * 40 - d * 0.5
+        if (s > bcs) { bcs = s; bc = c }
+      }
+      if (bc) return { pos: bc }
+    }
     if (obs.t > P.lootStopT) return null
     // don't wander far if the zone needs us
     const z = obs.zone
