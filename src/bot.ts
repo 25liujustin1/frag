@@ -31,6 +31,12 @@ export class Bot {
   private pathPartial = false
   private crates = new Map<number, V3>()
   private cubeMem = new Map<number, V3>()
+  private climbId = -1
+  private climbT = 0
+  private badLoot = new Set<number>()
+  private scoutT = -99
+  private scoutUntil = -1
+  private scoutZ = 0
   private visited = new Map<string, number>()
   private explore: V3 | null = null
   private exploreT = -99
@@ -232,6 +238,7 @@ export class Bot {
 
     let move: V2 = [0, 0]
     let boost = false
+    let climbJump = false
     const outside = !me.in_zone
     if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
@@ -253,10 +260,28 @@ export class Bot {
     } else {
       // loot or rotate
       const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
-      if (loot && !outside) {
-        this.mode = loot.takeId != null ? "loot" : loot.explore ? "explore" : "collect"
-        move = this.followTo(loot.pos, pos, t)
-        if (dist2(loot.pos, pos) < this.hello.config.loot.pickup_radius - 0.4 && loot.takeId != null) {
+      // scout jump: jet straight up and spin to spot loot on roofs and behind buildings
+      const knowsWeapon = loot?.takeId != null
+      if (this.scoutUntil < t && P.scout && needWeapon && !knowsWeapon && !underFire && !outside && me.grounded && me.energy >= P.scoutEnergy && t > 2 && t - this.scoutT > P.scoutEvery && t < P.searchStopT) {
+        this.scoutT = t; this.scoutUntil = t + P.scoutDur; this.scoutZ = pos[2]
+      }
+      if (t < this.scoutUntil) {
+        this.mode = "scout"
+        move = [0, 0]
+        climbJump = me.grounded && t - this.scoutT < 0.3
+        boost = !me.grounded && pos[2] - this.scoutZ < P.scoutHeight && me.energy > 20
+        this.sweep = wrap(this.sweep + 0.4)
+        aim = [this.sweep, -0.2]
+      } else if (loot && !outside) {
+        this.mode = loot.takeId != null ? (loot.climb ? "climb" : "loot") : loot.explore ? "explore" : "collect"
+        if (loot.climb) {
+          // give up on a roof pickup we can't reach in time (never stand at a wall jumping forever)
+          if (this.climbId !== loot.takeId) { this.climbId = loot.takeId!; this.climbT = t }
+          if (t - this.climbT > P.climbTimeout) this.badLoot.add(loot.takeId!)
+          const c = this.climbTo(loot.pos, loot.climb, me, pos, t)
+          move = c.move; boost = c.boost; climbJump = c.jump
+        } else move = this.followTo(loot.pos, pos, t)
+        if (dist2(loot.pos, pos) < this.hello.config.loot.pickup_radius - 0.4 && Math.abs(loot.pos[2] - pos[2]) < 3.5 && loot.takeId != null) {
           act.take = loot.takeId
           if (loot.drop != null) act.drop = loot.drop
         }
@@ -306,7 +331,8 @@ export class Bot {
       this.stuckRef = [pos[0], pos[1]]
       this.stuckRefT = t
     }
-    let jump = false
+    let jump = climbJump
+    if (this.mode === "climb" || this.mode === "scout") this.stuckRefT = t // climbing stalls on purpose; don't trigger stuck recovery
     if (t < this.jumpUntil) {
       jump = me.grounded
       if (!me.grounded && me.energy > 8) boost = true
@@ -389,7 +415,36 @@ export class Bot {
     return [c[0] + (pos[0] - c[0]) * k, c[1] + (pos[1] - c[1]) * k]
   }
 
-  private lootGoal(obs: Observation, slots: (WeaponObs | null)[], zoneGoal: V2 | null, search: boolean): { pos: V3; takeId?: number; drop?: number; explore?: boolean } | null {
+  /**
+   * Climb onto a roof for a pickup: walk to the ground spot next to the building, wait for enough
+   * energy, jump and jet straight up past the roof edge while pushing toward the pickup, then walk over.
+   */
+  private climbTo(p: V3, base: V2, me: Observation["self"], pos: V3, t: number): { move: V2; boost: boolean; jump: boolean } {
+    const up = p[2] - pos[2]
+    if (up < 0.6) return { move: dirTo(pos, p), boost: false, jump: false } // on the roof
+    const airborne = !me.grounded
+    if (!airborne && dist2(base, pos) > 5) return { move: this.followTo(base, pos, t), boost: false, jump: false }
+    const need = up * P.climbEnergyPerM + 10
+    if (!airborne && me.energy < Math.min(need, me.max_energy - 2)) return { move: [0, 0], boost: false, jump: false } // wait for energy
+    // rise until the feet clear the edge, pushing toward the pickup so we land on the roof
+    return { move: dirTo(pos, p), boost: airborne, jump: !airborne }
+  }
+
+  /** For a roof pickup: the ground spot to climb from, if the roof is low enough for our energy. */
+  private roofBase(p: number[], me: Observation["self"]): V2 | null {
+    const c = this.r.cellOf(p[0], p[1])
+    if (c < 0) return null
+    const n = this.nav.nearestWalkable(p[0], p[1], 14)
+    if (n < 0) return null
+    const bx = this.nav.nodeX(n), by = this.nav.nodeY(n)
+    const bc = this.r.cellOf(bx, by)
+    const up = p[2] - this.nav.floor[bc]
+    if (up < 2.5 || up > P.maxClimb || up * P.climbEnergyPerM + 10 > me.max_energy) return null
+    if (Math.hypot(bx - p[0], by - p[1]) > 26) return null
+    return [bx, by]
+  }
+
+  private lootGoal(obs: Observation, slots: (WeaponObs | null)[], zoneGoal: V2 | null, search: boolean): { pos: V3; takeId?: number; drop?: number; explore?: boolean; climb?: V2 } | null {
     const pos = obs.self.pos as V3
     const calm = !obs.mechs.some((m) => m.kind === "mech")
     // cubes (from kills, crates): worth a trip when nobody is in sight; clusters first
@@ -411,16 +466,24 @@ export class Bot {
     const tLeft = z.shrink_end - obs.t
     const zoneTight = zoneGoal && dist2(zoneGoal, pos) / obs.self.stats.walk_speed > tLeft * 0.6
     if (zoneTight) return null
-    let best: { pos: V3; takeId?: number; drop?: number; explore?: boolean } | null = null
+    let best: { pos: V3; takeId?: number; drop?: number; explore?: boolean; climb?: V2 } | null = null
     let bs = -Infinity
     const range = search ? P.lootRangeSearch : P.lootRange
     for (const [id, p] of this.pickups) {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > range || !this.inZoneSoon(obs, p.pos) || !this.reachable(p.pos)) continue
-      const s = take.gain * 60 - d
-      if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
+      if (d > range || !this.inZoneSoon(obs, p.pos)) continue
+      let climb: V2 | undefined
+      if (this.badLoot.has(id)) continue
+      if (!this.reachable(p.pos)) {
+        if (!P.climb || obs.t > P.climbStopT) continue
+        const b = this.roofBase(p.pos, obs.self)
+        if (!b) continue
+        climb = b
+      }
+      const s = take.gain * 60 - d - (climb ? P.climbPenalty : 0)
+      if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop, climb } }
     }
     for (const c of obs.cubes) {
       const d = dist2(c.pos, pos)
@@ -529,8 +592,18 @@ export class Bot {
     return best
   }
 
+  /**
+   * Is it safe to go to p? It must be inside the current zone, and we must be able to walk there and
+   * then on into the coming circle before the shrink finishes (with a margin).
+   */
   private inZoneSoon(obs: Observation, p: number[]): boolean {
-    return dist2(obs.zone.next_center, p) < obs.zone.next_radius * 0.95
+    const z = obs.zone, pos = obs.self.pos
+    if (dist2(z.center, p) > z.radius - 15) return false
+    const inNext = dist2(z.next_center, p) < z.next_radius * 0.95
+    if (inNext) return true
+    const speed = obs.self.stats.walk_speed * 0.8
+    const need = (dist2(pos, p) + Math.max(0, dist2(p, z.next_center) - z.next_radius * 0.8)) / speed + 8
+    return need < z.shrink_end - obs.t
   }
 
   /** Should we take a weapon of this kind? Returns preference gain and which slot to drop. */

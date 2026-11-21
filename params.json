@@ -1,12 +1,52 @@
 {
-  "name": "mr-v5",
-  "upgrades": ["armor", "plating", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "gun_rate", "nanites", "servos", "gyros", "mortar_reload", "gun_velocity", "lightning_range", "gun_mag", "capacitor", "reactor", "jets", "sensors", "lightning_chain", "mortar_velocity", "mortar_splash", "laser_pierce"],
-  "weaponPref": { "laser": 3, "lightning": 2, "mortar": 1, "gun": 0 },
+  "name": "mr-v6",
+  "upgrades": [
+    "armor",
+    "plating",
+    "laser_damage",
+    "laser_charge",
+    "lightning_efficiency",
+    "gun_damage",
+    "gun_rate",
+    "nanites",
+    "servos",
+    "gyros",
+    "mortar_reload",
+    "gun_velocity",
+    "lightning_range",
+    "gun_mag",
+    "capacitor",
+    "reactor",
+    "jets",
+    "sensors",
+    "lightning_chain",
+    "mortar_velocity",
+    "mortar_splash",
+    "laser_pierce"
+  ],
+  "weaponPref": {
+    "laser": 3,
+    "lightning": 2,
+    "mortar": 1,
+    "gun": 0
+  },
   "bands": {
-    "laser": [100, 210],
-    "lightning": [12, 38],
-    "gun": [35, 90],
-    "mortar": [60, 170]
+    "laser": [
+      100,
+      210
+    ],
+    "lightning": [
+      12,
+      38
+    ],
+    "gun": [
+      35,
+      90
+    ],
+    "mortar": [
+      60,
+      170
+    ]
   },
   "zoneInnerFrac": 0.55,
   "lootRange": 110,
@@ -19,12 +59,23 @@
   "lootRangeSearch": 250,
   "crateShootRange": 120,
   "crateSeekRange": 200,
-  "scanAmp": 1.0,
+  "scanAmp": 1,
   "retreatHpFrac": 0.45,
   "retreatOdds": 0.8,
   "reengageHpFrac": 0.7,
   "engageRange": 260,
   "jinkMin": 0.25,
   "jinkMax": 0.6,
-  "energyReserve": 25
+  "energyReserve": 25,
+  "climb": true,
+  "climbStopT": 150,
+  "climbPenalty": 40,
+  "climbEnergyPerM": 1.7,
+  "maxClimb": 50,
+  "scout": true,
+  "scoutEnergy": 90,
+  "scoutEvery": 30,
+  "scoutDur": 4.5,
+  "scoutHeight": 28,
+  "climbTimeout": 12
 }
