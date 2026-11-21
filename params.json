@@ -1,5 +1,5 @@
 {
-  "name": "mr-v8d",
+  "name": "mr-v9",
   "upgrades": [
     "armor",
     "plating",
@@ -101,7 +101,7 @@
   "pushHp": 450,
   "pushMinSelfHp": 0.3,
   "pushRange": 60,
-  "boostBursts": true,
+  "boostBursts": false,
   "burstChance": 0.25,
   "resetMax": 0,
   "resetHpFrac": 0.9,
@@ -118,5 +118,13 @@
   "ambush": false,
   "opener": false,
   "unawareAngle": 1.2,
-  "prechargeDist": 70
+  "prechargeDist": 70,
+  "grab": true,
+  "grabQuiet": 2.5,
+  "grabMinHp": 0.35,
+  "grabRange": 80,
+  "grabSafe": 45,
+  "grabRatio": 0.8,
+  "grabCubeV": 30,
+  "grabWeaponV": 40
 }

@@ -294,6 +294,7 @@ export class Bot {
     if (!this.escaping && me.hp < me.max_hp * P.escapeHpFrac && threatRecent) this.escaping = true
     if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
     const zoneSlack = zoneGoal ? this.zoneSlack(obs, zoneGoal) : Infinity
+    const grab = P.grab && !outside && !this.escaping && t - this.lastDmgT > P.grabQuiet && me.hp > me.max_hp * P.grabMinHp ? this.grabGoal(obs, slots, pos, enemies) : null
     if (zoneGoal && ((outside && P.zoneOutsideFirst) || zoneSlack < P.zoneSlack)) {
       // the zone wins over everything: get inside (weapons keep firing at whatever we were shooting)
       this.mode = outside ? "zone!" : "rotate!"
@@ -310,6 +311,16 @@ export class Bot {
         else move = this.combatDir(pos, threats[0], 9999, 9999, obs)
         boost = me.energy > 10
       } else move = [0, 0] // hidden: stand still and heal
+    } else if (grab) {
+      // loot the kill site (cubes + dropped weapons) while nobody is shooting at us; keep firing
+      this.mode = "grab"
+      move = this.followTo(grab.pos, pos, t)
+      const gd = dist2(grab.pos, pos)
+      if (grab.takeId != null && gd < this.hello.config.loot.pickup_radius - 0.4 && Math.abs(grab.pos[2] - pos[2]) < 3.5) {
+        act.take = grab.takeId
+        if (grab.drop != null) act.drop = grab.drop
+      }
+      boost = gd > 25 && me.energy > P.energyReserve + 20
     } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
       const threats = enemies.map((m) => [m.pos[0], m.pos[1], m.pos[2] + 8] as V3)
@@ -554,6 +565,40 @@ export class Bot {
     if (d <= inner) return null
     const k = inner / d
     return [c[0] + (pos[0] - c[0]) * k, c[1] + (pos[1] - c[1]) * k]
+  }
+
+  /**
+   * Best loot worth grabbing even with enemies around: cube piles (kill sites) and weapons that
+   * improve our loadout, within grabRange, where no visible enemy is close to the item or closer to it
+   * than we are. Returns null if nothing is worth the trip.
+   */
+  private grabGoal(obs: Observation, slots: (WeaponObs | null)[], pos: V3, enemies: ActorObs[]): { pos: V3; takeId?: number; drop?: number } | null {
+    let best: { pos: V3; takeId?: number; drop?: number } | null = null, bs = 0
+    const safe = (p: number[], d: number) => {
+      for (const e of enemies) {
+        const de = dist2(e.pos, p)
+        if (de < P.grabSafe || de < d * P.grabRatio) return false
+      }
+      return true
+    }
+    for (const c of this.cubeMem.values()) {
+      const d = dist2(c, pos)
+      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
+      let n = 0
+      for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
+      const s = n * P.grabCubeV - d
+      if (s > bs) { bs = s; best = { pos: c } }
+    }
+    for (const [id, p] of this.pickups) {
+      if (this.badLoot.has(id)) continue
+      const take = this.takeDecision(p.kind, slots)
+      if (!take) continue
+      const d = dist2(p.pos, pos)
+      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d)) continue
+      const s = take.gain * P.grabWeaponV - d
+      if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
+    }
+    return best
   }
 
   /**
