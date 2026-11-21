@@ -13,7 +13,7 @@ import { angDiff, clamp, dist2, dist3, log, Rng, wrap, yawTo, type V2, type V3 }
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number }
 
 export class Bot {
   name: string = P.name
@@ -50,6 +50,8 @@ export class Bot {
   private lastDmgT = -99
   private lastDmgBearing = 0
   private retreating = false
+  private escaping = false
+  private curTarget = -1
   private laserLostT = -1
   private sweep = 0
   private mode = "start"
@@ -97,6 +99,9 @@ export class Bot {
         if (e.bearing != null) this.lastDmgBearing = e.bearing
         const tr = e.by != null ? this.tracks.get(e.by) : undefined
         if (tr) tr.hitUsT = t
+      } else if (e.type === "hit") {
+        const tr = this.tracks.get(e.target)
+        if (tr) tr.weHitT = t
       } else if (e.type === "took" || e.type === "dropped") {
         if (e.type === "took") this.pickups.delete(e.id)
       }
@@ -121,7 +126,12 @@ export class Bot {
     const npcsAttacking = obs.mechs.filter((m) => m.kind === "npc" && (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 4 && dist2(m.pos, pos) < 90)
     let target: ActorObs | null = null
     let bestScore = Infinity
-    for (const m of [...enemies, ...npcsAttacking]) {
+    // mechs already fighting us (they hit us, or we hit them, recently). While any of them is in view,
+    // only they are targets: never wake up a fresh enemy mid-fight.
+    const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory) }
+    const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
+    const pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
+    for (const m of pool) {
       const d = dist2(m.pos, pos)
       if (d > P.engageRange) continue
       const tr = this.tracks.get(m.id)
@@ -129,9 +139,11 @@ export class Bot {
       let s = d / 60 + (m.hp ?? 1000) / 700
       if (!losOk) s += 3
       if (tr && tr.hitUsT > t - 3) s -= 1.5
+      if (m.id === this.curTarget) s -= P.targetStick // finish what we started
       if (m.kind === "npc") s += 2
       if (s < bestScore) { bestScore = s; target = m }
     }
+    this.curTarget = target ? target.id : -1
     const tgtDist = target ? dist2(target.pos, pos) : Infinity
     const tgtCenter: V3 | null = target ? [target.pos[0], target.pos[1], target.pos[2] + centerZ(target)] : null
     const tgtLos = !!tgtCenter && this.r.los(muzzle[0], muzzle[1], muzzle[2], tgtCenter[0], tgtCenter[1], tgtCenter[2])
@@ -153,7 +165,14 @@ export class Bot {
       let gunAim: [number, number] | null = null
       if (iGun >= 0) {
         const g = slots[iGun]!.stats
-        const sol = lead(muzzle, tgtCenter, tv, g.speed, 0.05, airborne ? cfg.mech.gravity : 0, target.pos[2] + 1)
+        // shoot from where our muzzle will be, and damp the lead for targets that reverse direction:
+        // with reversals at rate λ the expected travel over flight time T is v·(1-e^(-2λT))/(2λ)
+        const mv = me.vel as V3
+        const mz: V3 = [muzzle[0] + mv[0] * P.selfLead, muzzle[1] + mv[1] * P.selfLead, muzzle[2]]
+        const first = lead(mz, tgtCenter, tv, g.speed, 0.05, airborne ? cfg.mech.gravity : 0, target.pos[2] + 1)
+        const T = first.t + 0.05, lam = P.leadFlipRate
+        const k = lam > 0 ? (1 - Math.exp(-2 * lam * T)) / (2 * lam * T) : 1
+        const sol = lead(mz, tgtCenter, [tv[0] * k, tv[1] * k, tv[2]], g.speed, 0.05, airborne ? cfg.mech.gravity : 0, target.pos[2] + 1)
         gunAim = aimAt(muzzle, sol.pt)
       }
       const laser = iLaser >= 0 ? slots[iLaser]! : null
@@ -240,7 +259,23 @@ export class Bot {
     let boost = false
     let climbJump = false
     const outside = !me.in_zone
-    if (this.retreating && (target || underFire)) {
+    // escape: low HP + any recent threat → get out of sight and stay out until healed. Nothing else.
+    const recentTracks = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < P.escapeMemory)
+    const threatRecent = enemies.length > 0 || underFire || recentTracks.length > 0
+    if (!this.escaping && me.hp < me.max_hp * P.escapeHpFrac && threatRecent) this.escaping = true
+    if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
+    if (this.escaping && !outside) {
+      this.mode = "escape"
+      const threats = recentTracks.map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+      if (underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
+      const seen = threats.some((th) => this.r.los(th[0], th[1], th[2], pos[0], pos[1], pos[2] + 4.5) || this.r.los(th[0], th[1], th[2], pos[0], pos[1], pos[2] + 8.5))
+      if (threats.length && (seen || underFire)) {
+        const cover = this.findCover(pos, threats, obs)
+        if (cover) move = this.followTo(cover, pos, t)
+        else move = this.combatDir(pos, threats[0], 9999, 9999, obs)
+        boost = me.energy > 10
+      } else move = [0, 0] // hidden: stand still and heal
+    } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
       const threats = enemies.map((m) => [m.pos[0], m.pos[1], m.pos[2] + 8] as V3)
       if (threats.length === 0 && underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
@@ -255,14 +290,23 @@ export class Bot {
       // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
       if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
       else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
-      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs)
+      // can anything fire soon? (gun loaded, laser off cooldown, lightning in range with energy)
+      const ready = slots.some((w) => {
+        if (!w) return false
+        if (w.kind === "gun") return (w.ammo ?? 0) > 0 && (w.reload ?? 0) <= 0
+        if (w.kind === "laser") return w.cooldown <= 0.3
+        if (w.kind === "lightning") return tgtDist < w.stats.range && me.energy > 10
+        return w.cooldown <= 0.3
+      })
+      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready)
       if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
     } else {
       // loot or rotate
       const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
       // scout jump: jet straight up and spin to spot loot on roofs and behind buildings
       const knowsWeapon = loot?.takeId != null
-      if (this.scoutUntil < t && P.scout && needWeapon && !knowsWeapon && !underFire && !outside && me.grounded && me.energy >= P.scoutEnergy && t > 2 && t - this.scoutT > P.scoutEvery && t < P.searchStopT) {
+      const quiet = ![...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < P.scoutQuiet)
+      if (this.scoutUntil < t && P.scout && quiet && needWeapon && !knowsWeapon && !underFire && !outside && me.grounded && me.energy >= P.scoutEnergy && t > 2 && t - this.scoutT > P.scoutEvery && t < P.searchStopT) {
         this.scoutT = t; this.scoutUntil = t + P.scoutDur; this.scoutZ = pos[2]
       }
       if (t < this.scoutUntil) {
@@ -301,6 +345,8 @@ export class Bot {
         move = [move[0] * 0.6 + Math.cos(perp) * j * 0.8, move[1] * 0.6 + Math.sin(perp) * j * 0.8]
       }
     }
+    // never charge the laser while escaping (it halves our speed); the gun keeps firing
+    if (this.escaping && iLaser >= 0) fire[iLaser] = false
     // opportunistic take of any useful pickup underfoot
     if (act.take == null) {
       const p = this.pickupUnderfoot(obs, pos, slots)
@@ -355,7 +401,7 @@ export class Bot {
     for (const m of obs.mechs) {
       let tr = this.tracks.get(m.id)
       if (!tr) {
-        tr = { id: m.id, pos: m.pos as V3, vel: m.vel as V3, aim: m.aim as V2, hp: m.hp ?? 0, maxHp: m.max_hp ?? 0, cubes: m.cubes ?? 0, weapons: m.weapons ?? [], charging: !!m.charging, seenT: obs.t, hitUsT: -99 }
+        tr = { id: m.id, pos: m.pos as V3, vel: m.vel as V3, aim: m.aim as V2, hp: m.hp ?? 0, maxHp: m.max_hp ?? 0, cubes: m.cubes ?? 0, weapons: m.weapons ?? [], charging: !!m.charging, seenT: obs.t, hitUsT: -99, weHitT: -99 }
         this.tracks.set(m.id, tr)
       }
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
@@ -643,12 +689,13 @@ export class Bot {
    * Local steering for fights: sample 16 directions, keep the ones with room to move, prefer
    * the range band (closer / away / sideways) plus a jink component, stay inside the zone.
    */
-  private combatDir(pos: V3, tp: V3, lo: number, hi: number, obs: Observation): V2 {
+  private combatDir(pos: V3, tp: V3, lo: number, hi: number, obs: Observation, ready = true): V2 {
     const d = dist2(tp, pos)
     const toT = Math.atan2(tp[1] - pos[1], tp[0] - pos[0])
     const radial = d < lo ? -1 : d > hi ? 1 : 0 // -1 away, +1 closer
     const j = this.jink(obs.t)
     const z = obs.zone
+    const eyeZ = tp[2] + 8
     let best: V2 = [0, 0], bs = -Infinity
     for (let k = 0; k < 16; k++) {
       const a = (k / 16) * Math.PI * 2
@@ -657,6 +704,17 @@ export class Bot {
       const along = Math.cos(a - toT) // +1 toward target
       const side = Math.sin(a - toT) // +1 = left of the target line
       let s = radial * along * 2 + side * j * 1.2 - (radial === 0 ? Math.abs(along) * 0.6 : 0)
+      // skirmish: where we'd be in ~0.7 s; can the target see that spot?
+      if (P.skirmish && d < 260) {
+        const px = pos[0] + cx * 8, py = pos[1] + cy * 8, pz = this.r.groundAt(px, py)
+        const seen = this.r.los(tp[0], tp[1], eyeZ, px, py, pz + 4.5, 1) || this.r.los(tp[0], tp[1], eyeZ, px, py, pz + 8.5, 1)
+        s += ready ? (seen ? P.peekW : -P.peekW) : (seen ? -P.duckW : P.duckW)
+        // stay close to cover: prefer spots that have a hidden spot one more step out
+        if (seen) {
+          const qx = pos[0] + cx * 16, qy = pos[1] + cy * 16, qz = this.r.groundAt(qx, qy)
+          if (!this.r.los(tp[0], tp[1], eyeZ, qx, qy, qz + 4.5, 1)) s += P.coverW
+        }
+      }
       const nx = pos[0] + cx * 10, ny = pos[1] + cy * 10
       const zr = dist2(z.center, [nx, ny])
       if (zr > z.radius - 8) s -= 3
