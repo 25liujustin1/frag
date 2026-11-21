@@ -138,6 +138,10 @@ export class Bot {
     const eye: V3 = [pos[0], pos[1], pos[2] + me.stats.eye_height]
     const enemies = obs.mechs.filter((m) => m.kind === "mech")
     const npcsAttacking = obs.mechs.filter((m) => m.kind === "npc" && (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 4 && dist2(m.pos, pos) < 90)
+    // farm drones (2 cubes each) while it's quiet: no enemy mech seen recently, healthy, early in the match
+    const quietForFarm = P.farmNpc && t < P.farmStopT && me.hp > me.max_hp * P.farmMinHp && !obs.mechs.some((m) => m.kind === "mech") &&
+      ![...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < P.farmQuiet)
+    if (quietForFarm) for (const m of obs.mechs) if (m.kind === "npc" && !npcsAttacking.includes(m) && dist2(m.pos, pos) < P.farmRange) npcsAttacking.push(m)
     let target: ActorObs | null = null
     let bestScore = Infinity
     // mechs already fighting us (they hit us, or we hit them, recently). While any of them is in view,
@@ -393,6 +397,7 @@ export class Bot {
     } else {
       // loot or rotate
       const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
+      const dropAt = this.dropGoal(obs, pos, enemies)
       // scout jump: jet straight up and spin to spot loot on roofs and behind buildings
       const knowsWeapon = loot?.takeId != null
       const quiet = ![...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < P.scoutQuiet)
@@ -406,6 +411,12 @@ export class Bot {
         boost = !me.grounded && pos[2] - this.scoutZ < P.scoutHeight && me.energy > 20
         this.sweep = wrap(this.sweep + 0.4)
         aim = [this.sweep, -0.2]
+      } else if (dropAt && !outside) {
+        // supply drop: full HP + full energy + 3 cubes for standing in the ring alone for 4 s
+        this.mode = "drop"
+        const dd = dist2(dropAt, pos)
+        move = dd > P.dropStand ? this.followTo(dropAt, pos, t) : [0, 0]
+        boost = dd > 40 && me.energy > P.energyReserve + 20
       } else if (loot && !outside) {
         this.mode = loot.takeId != null ? (loot.climb ? "climb" : "loot") : loot.explore ? "explore" : "collect"
         if (loot.climb) {
@@ -577,6 +588,26 @@ export class Bot {
     if (d <= inner) return null
     const k = inner / d
     return [c[0] + (pos[0] - c[0]) * k, c[1] + (pos[1] - c[1]) * k]
+  }
+
+  /**
+   * A supply drop worth going for: within range, we arrive about when it lands, nobody is about to finish
+   * capturing it, no enemy mech is near it, and it's inside the coming zone. Returns its position.
+   */
+  private dropGoal(obs: Observation, pos: V3, enemies: ActorObs[]): V3 | null {
+    if (!P.drops || !obs.drops?.length) return null
+    let best: V3 | null = null, bd = Infinity
+    for (const d of obs.drops) {
+      const dist = dist2(d.pos, pos)
+      if (dist > P.dropRange) continue
+      const travel = dist / obs.self.stats.walk_speed
+      if (d.lands_in > travel + P.dropEarly) continue // no point standing in an empty field for long
+      if (d.holder != null && d.holder !== obs.self.id && d.progress > P.dropContestMax) continue
+      if (!this.inZoneSoon(obs, d.pos) || !this.reachable(d.pos)) continue
+      if (enemies.some((e) => dist2(e.pos, d.pos) < P.dropSafe)) continue
+      if (dist < bd) { bd = dist; best = d.pos as V3 }
+    }
+    return best
   }
 
   /**

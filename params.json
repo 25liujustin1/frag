@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.1",
+  "name": "mr-v9.2",
   "upgrades": [
     "armor",
     "plating",
@@ -133,5 +133,16 @@
   "ffaWeakFrac": 1.01,
   "ffaCloseRange": 60,
   "ffaEndgameAlive": 4,
-  "ffaEscapeHp": 0.35
+  "ffaEscapeHp": 0.35,
+  "farmNpc": false,
+  "farmStopT": 180,
+  "farmMinHp": 0.6,
+  "farmQuiet": 8,
+  "farmRange": 90,
+  "drops": true,
+  "dropRange": 220,
+  "dropEarly": 8,
+  "dropContestMax": 2.5,
+  "dropSafe": 80,
+  "dropStand": 4
 }
