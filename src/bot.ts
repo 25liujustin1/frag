@@ -41,6 +41,9 @@ export class Bot {
   private laserLostT = -1
   private sweep = 0
   private mode = "start"
+  private hold: { x: number; y: number; face: number; key: string; t: number } | null = null
+  private heardT = -99
+  private heardBearing = 0
 
   constructor(hello: Hello) {
     this.hello = hello
@@ -87,6 +90,11 @@ export class Bot {
       }
     }
     if (obs.offer) act.pick = this.pickUpgrade(obs.offer.choices.map((c) => c.id))
+    // sounds that suggest an approaching or firing mech (most recent, nearest band first)
+    for (const s of obs.sounds) {
+      if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
+      if (t - this.heardT > 1 || s.dist === "near") { this.heardT = t - s.age; this.heardBearing = s.bearing }
+    }
 
     // ---- weapons
     const slots = me.weapons
@@ -198,7 +206,7 @@ export class Bot {
       let bd = P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
-        if (d < bd && this.r.los(muzzle[0], muzzle[1], muzzle[2], c.pos[0], c.pos[1], c.pos[2] + 1.2)) { bd = d; crateGoal = c.pos as V3 }
+        if (d < bd && this.reachable(c.pos) && this.r.los(muzzle[0], muzzle[1], muzzle[2], c.pos[0], c.pos[1], c.pos[2] + 1.2)) { bd = d; crateGoal = c.pos as V3 }
       }
       if (crateGoal) {
         const cAim = aimAt(muzzle, [crateGoal[0], crateGoal[1], crateGoal[2] + 1.2])
@@ -210,9 +218,10 @@ export class Bot {
 
     // ---- movement
     const zoneGoal = this.zoneGoal(obs)
+    const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
     const lowHp = me.hp < me.max_hp * P.retreatHpFrac
-    if (this.retreating && me.hp > me.max_hp * P.reengageHpFrac) this.retreating = false
-    if (lowHp && (underFire || (target && tgtDist < 150))) this.retreating = true
+    if (this.retreating && me.hp > me.max_hp * P.reengageHpFrac && odds > 1) this.retreating = false
+    if ((lowHp || odds < P.retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
 
     let move: V2 = [0, 0]
     let boost = false
@@ -227,7 +236,11 @@ export class Bot {
       boost = me.energy > 30
     } else if (target && (tgtDist < P.engageRange) && target.kind === "mech") {
       this.mode = "fight"
-      const band = P.bands[best] ?? P.bands.gun
+      let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
+      const tw = target.weapons ?? []
+      // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
+      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
+      else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
       move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs)
       if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
     } else {
@@ -246,7 +259,8 @@ export class Bot {
         boost = outside && me.energy > 15
       } else {
         this.mode = "hold"
-        move = [0, 0]
+        const h = this.holdSpot(obs, pos)
+        move = h && Math.hypot(h.x - pos[0], h.y - pos[1]) > 3 ? this.followTo([h.x, h.y], pos, t) : [0, 0]
       }
       if (underFire) {
         // being shot by someone we can't see: keep moving sideways
@@ -263,13 +277,14 @@ export class Bot {
 
     // ---- facing when not aiming at something
     if (!aim) {
+      const recent = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 12).sort((a, b) => dist2(a.pos, pos) - dist2(b.pos, pos))[0]
       if (underFire) aim = [this.lastDmgBearing, 0]
-      else {
-        const recent = [...this.tracks.values()].filter((tr) => t - tr.seenT < 12).sort((a, b) => dist2(a.pos, pos) - dist2(b.pos, pos))[0]
-        if (recent) aim = [yawTo(pos, recent.pos), 0]
-        else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]), 0]
-        else { this.sweep = wrap(this.sweep + 0.12); aim = [this.sweep, 0] }
-      }
+      else if (t < 1.8) { this.sweep = wrap(this.sweep + 0.4); aim = [this.sweep, 0] } // look around at spawn for loot
+      else if (t - this.heardT < 3) aim = [this.heardBearing, 0]
+      else if (recent) aim = [yawTo(pos, recent.pos), 0]
+      else if (this.mode === "hold" && this.hold && Math.hypot(move[0], move[1]) < 0.1) aim = [this.hold.face + 0.6 * Math.sin(t * 0.7), 0]
+      else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]), 0]
+      else { this.sweep = wrap(this.sweep + 0.12); aim = [this.sweep, 0] }
     } else this.sweep = aim[0]
 
     // ---- stuck recovery
@@ -375,16 +390,84 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.lootRange || !this.inZoneSoon(obs, p.pos)) continue
+      if (d > P.lootRange || !this.inZoneSoon(obs, p.pos) || !this.reachable(p.pos)) continue
       const s = take.gain * 60 - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
     for (const c of obs.cubes) {
       const d = dist2(c.pos, pos)
-      if (d > 80 || !this.inZoneSoon(obs, c.pos)) continue
+      if (d > 80 || !this.inZoneSoon(obs, c.pos) || !this.reachable(c.pos)) continue
       const s = 40 - d
       if (s > bs) { bs = s; best = { pos: c.pos as V3 } }
     }
+    return best
+  }
+
+  /** Is a world point on walkable ground (not on a roof or in an enclosed courtyard)? */
+  private reachable(p: number[]): boolean {
+    const n = this.nav.nearestWalkable(p[0], p[1], 3)
+    if (n < 0) return false
+    if (Math.hypot(this.nav.nodeX(n) - p[0], this.nav.nodeY(n) - p[1]) > 4.5) return false
+    const c = this.r.cellOf(this.nav.nodeX(n), this.nav.nodeY(n))
+    return c >= 0 && p[2] - this.nav.floor[c] < 2.5
+  }
+
+  /**
+   * Fight odds: (time for the enemies that can see us to kill us) / (time for us to kill the target).
+   * > 1 means we expect to win the exchange.
+   */
+  private fightOdds(me: Observation["self"], slots: (WeaponObs | null)[], target: ActorObs, enemies: ActorObs[], pos: V3): number {
+    const d = dist2(target.pos, pos)
+    const myMult = 1 + 0.04 * Math.min(me.cubes, 10)
+    let ours = 0
+    for (const w of slots) if (w) ours += weaponDps(w.kind, d, 0.55, w.stats.range)
+    ours *= myMult
+    let theirs = 0
+    const myC: V3 = [pos[0], pos[1], pos[2] + 4.5]
+    for (const e of enemies) {
+      const de = dist2(e.pos, pos)
+      if (de > 280) continue
+      if (e.id !== target.id && !this.r.los(e.pos[0], e.pos[1], e.pos[2] + 8, myC[0], myC[1], myC[2])) continue
+      let dps = 0
+      for (const k of e.weapons ?? ["gun"]) dps += weaponDps(k, de, 0.6, 0)
+      theirs += dps * (1 + 0.04 * Math.min(e.cubes ?? 0, 10))
+    }
+    const armor = me.stats.armor ?? 0
+    if (ours <= 0) return 0
+    if (theirs <= 0) return 9
+    return (me.hp / (theirs * (1 - armor))) / ((target.hp ?? 1400) / ours)
+  }
+
+  /** A sheltered spot near us inside the coming zone, facing the most open direction. */
+  private holdSpot(obs: Observation, pos: V3): { x: number; y: number; face: number } | null {
+    const z = obs.zone
+    const key = `${z.next_center[0]},${z.next_center[1]},${z.next_radius}`
+    const h = this.hold
+    if (h && h.key === key && obs.t - h.t < 25) return h
+    const inner = Math.max(z.next_radius * P.zoneInnerFrac, 6)
+    let best: { x: number; y: number; face: number } | null = null, bs = Infinity
+    for (const R of [0, 10, 20, 32, 45]) {
+      for (let k = 0; k < (R ? 12 : 1); k++) {
+        const a = (k / 12) * Math.PI * 2
+        const x = pos[0] + Math.cos(a) * R, y = pos[1] + Math.sin(a) * R
+        const n = this.nav.nodeAt(x, y)
+        if (n < 0 || !this.nav.walk[n]) continue
+        if (dist2(z.next_center, [x, y]) > inner && R > 0) continue
+        const gz = this.r.groundAt(x, y) + 6
+        let open = 0, fx = 0, fy = 0
+        for (let q = 0; q < 16; q++) {
+          const b = (q / 16) * Math.PI * 2, cx = Math.cos(b), cy = Math.sin(b)
+          const o60 = this.r.los(x, y, gz, x + cx * 60, y + cy * 60, gz, 1)
+          const o120 = o60 && this.r.los(x, y, gz, x + cx * 120, y + cy * 120, gz, 1)
+          open += (o60 ? 1 : 0) + (o120 ? 1 : 0)
+          if (o120) { fx += cx; fy += cy }
+        }
+        if (open < 2) continue // fully boxed in: can't see anyone coming
+        const s = open + R * 0.08
+        if (s < bs) { bs = s; best = { x, y, face: Math.atan2(fy, fx) } }
+      }
+    }
+    this.hold = best ? { ...best, key, t: obs.t } : null
     return best
   }
 
@@ -522,6 +605,19 @@ export class Bot {
       if (best && bd < R + 10) break
     }
     return best
+  }
+}
+
+const SOUND_THREAT = new Set(["gun", "laser", "laser_charge", "lightning", "mortar", "step", "boost", "jet", "reload"])
+
+/** Rough expected dps of a weapon kind at distance d (acc = gun hit rate at close range). */
+function weaponDps(kind: string, d: number, acc: number, range: number): number {
+  switch (kind) {
+    case "gun": return d < (range || 230) ? 188 * acc * clamp(1.15 - d / 220, 0.2, 1) : 0
+    case "laser": return d < (range || 280) ? 120 : 0
+    case "lightning": return d < (range || 45) + 3 ? 200 : 0
+    case "mortar": return d > 20 && d < 230 ? 50 : 0
+    default: return 0
   }
 }
 
