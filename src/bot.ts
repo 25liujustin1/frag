@@ -52,8 +52,16 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private myRad = 2.5
+  private jumpZ = 0
   private myKills = 0
   private survNow = false
+  private coverAt: V2 | null = null
+  private coverT = -99
+  private soundContacts: { pos: V3; t: number }[] = []
+  private zoneEdgeDist = 999
+  private campAnchor: V2 | null = null
+  private campT = 0
   ffa = false
   ffaT = -1
   private ambushing = false
@@ -104,6 +112,13 @@ export class Bot {
     const act: Omit<Action, "tick"> = {}
 
     this.updateTracks(obs)
+    {
+      const cfgc = this.hello.config
+      this.myRad = cfgc.mech.radius * (1 + (cfgc.cubes.size_per_cube ?? 0.05) * obs.self.cubes)
+      const need = P.sizeAware ? this.myRad + 0.4 : 0
+      if (need > this.nav.dynClear + 0.05) this.pathT = -99 // we grew: replan through gaps we still fit
+      this.nav.dynClear = need
+    }
     for (const e of obs.events) {
       if (e.type === "damaged" && e.weapon !== "zone") {
         this.lastDmgT = t
@@ -128,6 +143,19 @@ export class Bot {
     for (const s of obs.sounds) {
       if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
       if (t - this.heardT > 1 || s.dist === "near") { this.heardT = t - s.age; this.heardBearing = s.bearing }
+      // remember where the sound roughly came from (threat picture: flankers we can hear but not see)
+      const r = s.dist === "near" ? 35 : 100
+      this.soundContacts.push({ pos: [obs.self.pos[0] + Math.cos(s.bearing) * r, obs.self.pos[1] + Math.sin(s.bearing) * r, obs.self.pos[2]], t: t - s.age })
+    }
+    this.soundContacts = this.soundContacts.filter((s) => t - s.t < 8)
+    {
+      // distance to the current zone edge, and how long we've been fighting in the same area
+      const zc = obs.zone.center, zr = obs.zone.radius
+      this.zoneEdgeDist = zr - dist2(zc, obs.self.pos)
+      const fighting = this.mode === "fight" || this.mode === "reposition" || this.mode === "retreat"
+      if (fighting && this.campAnchor && dist2(this.campAnchor, obs.self.pos) < 30) this.campT += 0.1
+      else if (fighting) { this.campAnchor = [obs.self.pos[0], obs.self.pos[1]]; this.campT = 0 }
+      else this.campT = 0
     }
 
     // ---- weapons
@@ -345,12 +373,21 @@ export class Bot {
       boost = gd > 25 && me.energy > P.energyReserve + 20
     } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
-      const threats = enemies.map((m) => [m.pos[0], m.pos[1], m.pos[2] + 8] as V3)
+      // hide from every enemy seen recently, not just the ones in view this tick
+      const threats = (P.retreatV2 ? [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8).map((tr) => tr.pos) : enemies.map((m) => m.pos))
+        .map((p) => [p[0], p[1], p[2] + 8] as V3)
       if (threats.length === 0 && underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
-      const cover = this.findCover(pos, threats, obs)
+      let cover: V2 | null = null
+      if (P.retreatV2 && this.coverAt && t - this.coverT < P.coverCommit) {
+        // keep the spot we picked unless an enemy can now see it
+        const c = this.coverAt, gz = this.r.groundAt(c[0], c[1])
+        if (!threats.some((th) => this.r.los(th[0], th[1], th[2], c[0], c[1], gz + 4.5, 1))) cover = c
+      }
+      if (!cover) { cover = this.findCover(pos, threats, obs); this.coverAt = cover; this.coverT = t }
       if (cover) move = this.followTo(cover, pos, t)
+      else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
       else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
-      boost = me.energy > 30
+      boost = me.energy > (P.retreatV2 ? 8 : 30)
     } else if (target && (tgtDist < P.engageRange) && target.kind === "mech") {
       this.mode = "fight"
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
@@ -374,6 +411,7 @@ export class Bot {
       move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready || pushing)
       if (P.posScore) {
         const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+        if (P.threatPic) for (const s of this.soundContacts) if (t - s.t < 6) threats.push([s.pos[0], s.pos[1], s.pos[2] + 8])
         const spot = this.fightSpot(pos, target, threats, band, ready, obs)
         if (spot && Math.hypot(spot[0] - pos[0], spot[1] - pos[1]) > P.spotArrive) {
           // head for the better spot, keeping a little sideways jink so we're not a straight-line target
@@ -477,6 +515,7 @@ export class Bot {
     if (!wantMove || t - this.stuckRefT > 1.0) {
       if (wantMove && dist2(this.stuckRef, pos) < 1.5 && me.grounded && t > 1) {
         this.jumpUntil = t + 0.9
+        this.jumpZ = pos[2]
         this.pathT = -99 // force replan
         const n = this.nav.nearestWalkable(pos[0] + move[0] * 4, pos[1] + move[1] * 4, 2)
         if (n >= 0) this.nav.cost[n] += 3
@@ -508,6 +547,10 @@ export class Bot {
     const len = Math.hypot(move[0], move[1])
     if (len > 1) move = [move[0] / len, move[1] / len]
     act.move = [round3(move[0]), round3(move[1])]
+    if (P.airBoostGate && !me.grounded) {
+      const meant = this.mode === "climb" || this.mode === "scout" || (t < this.jumpUntil && pos[2] - this.jumpZ < P.unstuckJetH)
+      if (!meant) boost = false
+    }
     act.boost = boost
     act.jump = jump
     act.aim = [round3(wrap(aim[0])), round3(clamp(aim[1], me.stats.min_pitch, me.stats.max_pitch))]
@@ -796,10 +839,27 @@ export class Bot {
       for (const k of e.weapons ?? ["gun"]) dps += weaponDps(k, de, 0.6, 0)
       theirs += dps * (1 + 0.04 * Math.min(e.cubes ?? 0, 10))
     }
+    // threat picture: enemies seen recently (but not in view / not shooting yet) that are close count too
+    if (P.threatPic) {
+      const visible = new Set(enemies.map((e) => e.id))
+      for (const tr of this.tracks.values()) {
+        if (tr.id >= 100 || visible.has(tr.id) || this.t - tr.seenT > P.threatMem) continue
+        const de = dist2(tr.pos, pos)
+        if (de > 150) continue
+        let dps = 0
+        for (const k of tr.weapons.length ? tr.weapons : ["gun"]) dps += weaponDps(k, Math.max(de, 60), 0.6, 0)
+        theirs += dps * P.comingW
+      }
+      // heard but never seen nearby: footsteps / boosts / gunfire within the near band
+      for (const s of this.soundContacts) if (this.t - s.t < 4) theirs += 60 * P.comingW
+    }
     const armor = me.stats.armor ?? 0
     if (ours <= 0) return 0
     if (theirs <= 0) return 9
-    return (me.hp / (theirs * (1 - armor))) / ((target.hp ?? 1400) / ours)
+    let odds = (me.hp / (theirs * (1 - armor))) / ((target.hp ?? 1400) / ours)
+    // zone closing in behind us: fewer ways out
+    if (P.threatPic && this.zoneEdgeDist < 30) odds /= 1 + P.zoneOddsW
+    return odds
   }
 
   /** A sheltered spot near us inside the coming zone, facing the most open direction. */
@@ -937,6 +997,22 @@ export class Bot {
     return best
   }
 
+  /** Escape direction through the widest angular gap between threats (with room to move). */
+  private gapDir(pos: V3, threats: V3[]): V2 {
+    const bearings = threats.map((th) => Math.atan2(th[1] - pos[1], th[0] - pos[0]))
+    let best: V2 = [0, 0], bs = -Infinity
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2, cx = Math.cos(a), cy = Math.sin(a)
+      const free = this.freeLen(pos, cx, cy, 9)
+      if (free < 3) continue
+      let minGap = Math.PI
+      for (const b of bearings) minGap = Math.min(minGap, angDiff(a, b))
+      const s = minGap + free * 0.05
+      if (s > bs) { bs = s; best = [cx, cy] }
+    }
+    return best
+  }
+
   /** How far (≤ len m) the mech can move along (cx, cy) with clearance, staying on the connected map. */
   private freeLen(pos: V3, cx: number, cy: number, len: number): number {
     const nav = this.nav, r = this.r
@@ -944,11 +1020,14 @@ export class Bot {
     for (let s = 1.5; s <= len + 0.01; s += 1.5) {
       const x = pos[0] + cx * s, y = pos[1] + cy * s
       const c = r.cellOf(x, y)
-      if (c < 0 || nav.clear[c] < 2.6 || !nav.isMain(nav.nodeAt(x, y))) break
+      if (c < 0 || nav.clear[c] < this.roomClear() || !nav.isMain(nav.nodeAt(x, y))) break
       ok = s
     }
     return ok
   }
+
+  /** clearance needed to move: the starting radius check (2.6) grows with our size */
+  private roomClear(): number { return P.sizeAware ? Math.max(2.6, this.myRad + 0.1) : 2.6 }
 
   /** Is there room for the mech to move `len` m along (cx, cy)? */
   private roomAlong(pos: V3, cx: number, cy: number, len: number): boolean {
@@ -956,7 +1035,7 @@ export class Bot {
     for (let s = 2; s <= len; s += 1.5) {
       const x = pos[0] + cx * s, y = pos[1] + cy * s
       const c = r.cellOf(x, y)
-      if (c < 0 || nav.clear[c] < 2.6) return false
+      if (c < 0 || nav.clear[c] < this.roomClear()) return false
       if (s >= len - 1.5 && !nav.isMain(nav.nodeAt(x, y))) return false // don't step out of the connected map
     }
     return true
@@ -1000,7 +1079,7 @@ export class Bot {
     const n = Math.ceil(Math.hypot(bx - ax, by - ay))
     for (let k = 1; k <= n; k++) {
       const c = this.r.cellOf(ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n)
-      if (c < 0 || this.nav.clear[c] < 2.7) return false
+      if (c < 0 || this.nav.clear[c] < (P.sizeAware ? Math.max(2.7, this.myRad + 0.2) : 2.7)) return false
     }
     return true
   }
@@ -1054,6 +1133,13 @@ export class Bot {
         s += exits === 0 ? P.spotDeadEndW : exits === 1 ? P.spotDeadEndW / 3 : 0
         s += Math.max(0, dz - (zr - 25)) * 0.15 // hugging the edge of the zone
         s += R * P.spotTravelW
+        if (P.threatPic) {
+          // protect our back: open ground behind us (away from the target) lets flankers walk in unseen
+          const ba = Math.atan2(y - tc[1], x - tc[0])
+          if (this.r.los(x, y, gz + 6, x + Math.cos(ba) * 60, y + Math.sin(ba) * 60, gz + 6, 1)) s += P.spotRearW
+          // don't camp: after fighting in one area for a while, prefer moving on
+          if (this.campT > P.campAfter && R < 14) s += P.campW
+        }
         // never between enemies: the widest angle between any two threat directions (π = sandwiched)
         if (threats.length >= 2) {
           let spread = 0

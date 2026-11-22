@@ -29,6 +29,9 @@ export class Nav {
   private heapN = 0
   /** extra per-node cost multiplier (exposure, threat); 0 = none */
   readonly cost: Float32Array
+  /** per-node clearance, and the minimum clearance the current mech needs (set each tick by the bot) */
+  clearN!: Float32Array
+  dynClear = 0
   /** connected-component id per node (-1 = not walkable) and the id of the largest one */
   readonly comp: Int32Array
   main = 0
@@ -94,6 +97,9 @@ export class Nav {
     this.heap = new Int32Array(n2 * 2)
     this.heapF = new Float32Array(n2 * 2)
     this.cost = new Float32Array(n2)
+    // clearance (m) at each node: lets the planner respect a mech that grew with cubes
+    this.clearN = new Float32Array(n2)
+    for (let J = 0; J < this.ny; J++) for (let I = 0; I < this.nx; I++) this.clearN[J * this.nx + I] = this.clear[2 * J * r.nx + 2 * I]
   }
 
   nodeAt(x: number, y: number): number {
@@ -112,7 +118,7 @@ export class Nav {
       const I = I0 + dI, J = J0 + dJ
       if (I < 0 || J < 0 || I >= this.nx || J >= this.ny) continue
       const n = J * this.nx + I
-      if (!this.walk[n] || (mainOnly && this.comp[n] !== this.main)) continue
+      if (!this.walk[n] || (mainOnly && this.comp[n] !== this.main) || this.clearN[n] < this.dynClear) continue
       const d = dI * dI + dJ * dJ
       if (d < bd) { bd = d; best = n }
     }
@@ -150,7 +156,7 @@ export class Nav {
         const vi = ui + di, vj = uj + dj
         if (vi < 0 || vj < 0 || vi >= nx || vj >= this.ny) continue
         const v = vj * nx + vi
-        if (!walk[v] || cl[v] === gen) continue
+        if (!walk[v] || cl[v] === gen || this.clearN[v] < this.dynClear) continue
         if (di !== 0 && dj !== 0 && (!walk[uj * nx + vi] || !walk[vj * nx + ui])) continue // no corner cutting
         const ng = g[u] + STEP[k] * (1 + cost[v])
         if (st[v] !== gen || ng < g[v]) {
