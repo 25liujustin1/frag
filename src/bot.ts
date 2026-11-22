@@ -54,6 +54,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private recovering = false
   private climbStillT = -1
   private myPos: V3 = [0, 0, 0]
   private nowT = 0
@@ -317,7 +318,7 @@ export class Bot {
     if (P.calmT > 0 && !hostileNear && (t - this.lastDmgT < P.calmT || [...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.calmT && dist2(tr.pos, pos) < 250))) hostileNear = true
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
     let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
-    if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !this.isPassive(m.id))
+    if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !(P.passiveSplit ? this.isPassiveTarget(m.id) : this.isPassive(m.id)))
     // standoff: a target we've held for a while without firing a shot is dropped for a bit (unless it's shooting us)
     if (P.standoffT > 0) pool = pool.filter((m) => !((this.ignoreUntil.get(m.id) ?? -1) > t) || (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 3)
     if (this.ffa && !fighting.length) {
@@ -664,11 +665,15 @@ export class Bot {
         this.mode = "push"
         band = tw.includes("lightning") && iLight < 0 ? [Math.max(band[0], 50), Math.max(band[1], 70)] : [Math.min(band[0], 15), Math.min(band[1], P.pushRange)]
       }
-      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready || pushing)
+      // recover in cover: hurt, and this bot isn't hitting us -> don't step out for a shot; hold fire so regen can run
+      const recovering = P.recoverHp > 0 && !pushing && me.hp < me.max_hp * P.recoverHp && t - this.lastDmgT > P.recoverHitT
+      this.recovering = recovering
+      const readyR = ready && !recovering
+      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, readyR || pushing)
       if (P.posScore) {
         const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < (P.kite ? P.kiteMemT : 8) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
         if (P.threatPic) for (const s of this.soundContacts) if (t - s.t < 6) threats.push([s.pos[0], s.pos[1], s.pos[2] + 8])
-        const spot = this.fightSpot(pos, target, threats, band, ready, obs)
+        const spot = this.fightSpot(pos, target, threats, band, readyR, obs)
         if (spot && Math.hypot(spot[0] - pos[0], spot[1] - pos[1]) > P.spotArrive) {
           // head for the better spot, keeping a little sideways jink so we're not a straight-line target
           const f = this.followTo(spot, pos, t)
@@ -891,6 +896,8 @@ export class Bot {
     }
     this.faceThreats = []
     if (this.winHealing) { fire[0] = false; fire[1] = false }
+    if (this.recovering && this.mode !== "retreat") { fire[0] = false; fire[1] = false }
+    this.recovering = false
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
@@ -1557,6 +1564,15 @@ export class Bot {
     const out: V3[] = []
     for (const tr of this.tracks.values()) if (tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.retreatMem) out.push(tr.pos)
     return out
+  }
+
+  /** For TARGETING: never hit us and watched a while; only bots actually closing in stop being passive
+   *  (a farmer that merely wanders near us stays a non-target while hostiles are around). */
+  private isPassiveTarget(id: number): boolean {
+    const tr = this.tracks.get(id)
+    if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
+    if (tr.approach != null && tr.approach.t > this.nowT - 5 && tr.approach.d0 - dist2(tr.pos, this.myPos) > P.passiveClosing) return false
+    return true
   }
 
   /** clearance needed to move: the starting radius check (2.6) grows with our size */

@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11p",
+  "name": "mr-v11q",
   "upgrades": [
     "armor",
     "plating",
@@ -298,5 +298,8 @@
   "wedgeClear": 1,
   "passiveNear": 80,
   "passiveClosing": 30,
-  "climbStall": 3
+  "climbStall": 3,
+  "recoverHp": 0.6,
+  "recoverHitT": 4,
+  "passiveSplit": false
 }
