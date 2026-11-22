@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.7b",
+  "name": "mr-v9.8a",
   "upgrades": [
     "armor",
     "plating",
@@ -48,7 +48,7 @@
       170
     ]
   },
-  "zoneInnerFrac": 0.55,
+  "zoneInnerFrac": 0.85,
   "lootRange": 110,
   "lootStopT": 200,
   "crateRange": 70,
@@ -154,7 +154,7 @@
   "survEscapeHp": 0.4,
   "survZoneInnerFrac": 0.3,
   "survAfterT": 99999,
-  "survAfterKills": 3,
+  "survAfterKills": 99,
   "grabThreatR": 120,
   "grabMaxNear": 99,
   "grabCloseOk": 15,
