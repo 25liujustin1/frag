@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.6",
+  "name": "mr-v9.6b",
   "upgrades": [
     "armor",
     "plating",
@@ -158,7 +158,7 @@
   "grabThreatR": 120,
   "grabMaxNear": 99,
   "grabCloseOk": 15,
-  "retreatV2": true,
+  "retreatV2": false,
   "coverCommit": 2,
   "threatPic": false,
   "threatMem": 10,
@@ -167,7 +167,7 @@
   "spotRearW": 1,
   "campAfter": 25,
   "campW": 1.5,
-  "sizeAware": true,
-  "airBoostGate": true,
+  "sizeAware": false,
+  "airBoostGate": false,
   "unstuckJetH": 3
 }
