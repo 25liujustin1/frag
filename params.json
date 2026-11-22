@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.8a",
+  "name": "mr-v9.8b",
   "upgrades": [
     "armor",
     "plating",
@@ -48,7 +48,7 @@
       170
     ]
   },
-  "zoneInnerFrac": 0.85,
+  "zoneInnerFrac": 0.55,
   "lootRange": 110,
   "lootStopT": 200,
   "crateRange": 70,
@@ -173,5 +173,6 @@
   "swivel": false,
   "swivelAmp": 1.6,
   "swivelRate": 1.6,
-  "swivelHoldRate": 2.5
+  "swivelHoldRate": 2.5,
+  "separateW": 2
 }

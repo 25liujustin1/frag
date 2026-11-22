@@ -1133,6 +1133,11 @@ export class Bot {
         s += exits === 0 ? P.spotDeadEndW : exits === 1 ? P.spotDeadEndW / 3 : 0
         s += Math.max(0, dz - (zr - 25)) * 0.15 // hugging the edge of the zone
         s += R * P.spotTravelW
+        // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
+        if (P.separateW > 0) for (const th of threats) {
+          if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
+          s += P.separateW * Math.max(0, 120 - Math.hypot(th[0] - x, th[1] - y)) / 120
+        }
         if (P.threatPic) {
           // protect our back: open ground behind us (away from the target) lets flankers walk in unseen
           const ba = Math.atan2(y - tc[1], x - tc[0])
