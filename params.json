@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11m",
+  "name": "mr-v11n",
   "upgrades": [
     "armor",
     "plating",
@@ -291,5 +291,8 @@
   "healAfterWin": false,
   "winHealMax": 30,
   "winHealHp": 0.85,
-  "winSafeR": 120
+  "winSafeR": 120,
+  "kite": true,
+  "kiteMemT": 30,
+  "kiteDriftW": 2
 }

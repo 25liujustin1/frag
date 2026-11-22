@@ -662,7 +662,7 @@ export class Bot {
       }
       move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready || pushing)
       if (P.posScore) {
-        const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+        const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < (P.kite ? P.kiteMemT : 8) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
         if (P.threatPic) for (const s of this.soundContacts) if (t - s.t < 6) threats.push([s.pos[0], s.pos[1], s.pos[2] + 8])
         const spot = this.fightSpot(pos, target, threats, band, ready, obs)
         if (spot && Math.hypot(spot[0] - pos[0], spot[1] - pos[1]) > P.spotArrive) {
@@ -1653,6 +1653,12 @@ export class Bot {
         s += exits === 0 ? P.spotDeadEndW : exits === 1 ? P.spotDeadEndW / 3 : 0
         s += Math.max(0, dz - (zr - 25)) * 0.15 // hugging the edge of the zone
         s += R * P.spotTravelW
+        // kiting: keep drifting away from where the other bots are (plan for more than we see)
+        if (P.kite) {
+          let cx = 0, cy = 0, n = 0
+          for (const th of threats) { if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue; cx += th[0]; cy += th[1]; n++ }
+          if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
+        }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
