@@ -54,6 +54,9 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private ffaByClock = false
+  private enemyVisT = -99
+  private healFirstHold = false
   private antiLights: V3[] = []
   private retreatDir: V2 | null = null
   private retreatDirT = -99
@@ -134,6 +137,7 @@ export class Bot {
 
   constructor(hello: Hello) {
     this.hello = hello
+    if (P.ffaClock) { const now = Date.now() / 1000; if (now >= P.ffaClockT && now < P.ffaClockT + 5 * 86400) { this.ffa = true; this.ffaByClock = true } }
     this.rng = new Rng(hello.seed)
     let dir = hello.map?.dir
     if (!dir || !existsSync(dir + "/v2/world.json")) dir = ROOT + "arena"
@@ -307,6 +311,8 @@ export class Bot {
     // survivor mode: always (P.survivor), or switch to it late (time) or after enough kills (hybrid)
     this.survNow = !!P.survivor || t >= P.survAfterT || this.myKills >= P.survAfterKills
     if (!this.ffa && P.ffaDetect && t < P.ffaDetectT && obs.alive + this.myKills <= (this.hello.config.match.mechs ?? 16) - P.ffaDeaths) { this.ffa = true; this.ffaT = t }
+    // clock-set free-for-all, but by 1:00 nobody has died except bots we killed -> it is practice after all
+    if (this.ffaByClock && t >= 60 && obs.alive + this.myKills >= (this.hello.config.match.mechs ?? 16)) { this.ffa = false; this.ffaByClock = false }
     // sounds that suggest an approaching or firing mech (most recent, nearest band first)
     for (const s of obs.sounds) {
       if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
@@ -358,7 +364,15 @@ export class Bot {
     // just escaped a chase: no new fights with passive bots for a while (hostiles out of sight are still around)
     if (P.calmT > 0 && !hostileNear && (t - this.lastDmgT < P.calmT || [...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.calmT && dist2(tr.pos, pos) < 250))) hostileNear = true
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
+    if (enemies.length) this.enemyVisT = t
     let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
+    // 6) engagement range: new fights with uninvolved bots only when close enough and healthy enough
+    if (P.engGate && !fighting.length) pool = pool.filter((m) => {
+      if (m.kind === "npc") return true
+      const tr = this.tracks.get(m.id)
+      if (tr && (tr.hitUsT > t - 6 || engaged(m.id))) return true
+      return dist2(m.pos, pos) < (slots.some((w) => w?.kind === "laser") ? P.engGateLaserR : P.engGateR) && me.hp > me.max_hp * P.engGateHp
+    })
     if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !(P.passiveSplit ? this.isPassiveTarget(m.id) : this.isPassive(m.id)))
     // don't wake idle bots: only shoot bots that are hunting us (shot us, closing in, or already in a fight with us)
     if (P.noWake) pool = pool.filter((m) => {
@@ -524,6 +538,7 @@ export class Bot {
     if (iGun >= 0) {
       const g = slots[iGun]!
       if ((g.reload ?? 0) <= 0 && ((g.ammo ?? 0) === 0 || ((g.ammo ?? 0) <= 4 && !tgtLos))) act.reload = true
+      if (P.coverReload && (g.reload ?? 0) <= 0 && !fire[iGun] && (g.ammo ?? 0) <= Math.round(0.6 * (g.stats.mag ?? 12)) && t - this.enemyVisT > 1.1) act.reload = true
     }
 
     // crate shooting when calm (cubes + loot)
@@ -533,8 +548,9 @@ export class Bot {
     this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
     // crates only when it's really calm: not retreating, no hit and no hostile seen for a while
-    const crateCalm = P.crateCalmT <= 0 || (!this.retreating && t - this.lastDmgT > P.crateCalmT &&
-      ![...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.crateCalmT))
+    if (P.healFirst) { if (me.hp < me.max_hp * P.healFirstLo) this.healFirstHold = true; else if (me.hp >= me.max_hp * P.healFirstHi) this.healFirstHold = false }
+    const crateCalm = (!P.healFirst || !this.healFirstHold) && (P.crateCalmT <= 0 || (!this.retreating && t - this.lastDmgT > P.crateCalmT &&
+      ![...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.crateCalmT)))
     if (!target && !this.winHealing && crateCalm && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
@@ -1462,6 +1478,8 @@ export class Bot {
   /** Should we take a weapon of this kind? Returns preference gain and which slot to drop. */
   private takeDecision(kind: string, slots: (WeaponObs | null)[]): { gain: number; drop?: number } | null {
     if (kind === "gun" || slots.some((w) => w?.kind === kind)) return null
+    // game rule: a laser hit on a mech holding a mortar does +60% (laser.cookoff) -> never carry one
+    if (P.noMortar && kind === "mortar") return null
     const pref = P.weaponPref[kind] ?? 0
     const empty = slots.findIndex((w) => w === null)
     if (empty >= 0) return { gain: pref + 1 }

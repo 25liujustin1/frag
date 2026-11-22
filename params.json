@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11v",
+  "name": "mr-v11w",
   "upgrades": [
     "armor",
     "plating",
@@ -60,8 +60,8 @@
   "crateShootRange": 120,
   "crateSeekRange": 200,
   "scanAmp": 1,
-  "retreatHpFrac": 0.25,
-  "retreatOdds": 0.5,
+  "retreatHpFrac": 0.12,
+  "retreatOdds": 0.3,
   "reengageHpFrac": 0.5,
   "engageRange": 290,
   "jinkMin": 0.25,
@@ -153,7 +153,7 @@
   "survCloseRange": 40,
   "survEscapeHp": 0.4,
   "survZoneInnerFrac": 0.3,
-  "survAfterT": 99999,
+  "survAfterT": 265,
   "survAfterKills": 99,
   "grabThreatR": 120,
   "grabMaxNear": 99,
@@ -320,5 +320,16 @@
   "antiLightMem": 6,
   "laserPunish": false,
   "laserPunishT": 1.5,
-  "laserPunishOdds": 2
+  "laserPunishOdds": 2,
+  "noMortar": false,
+  "healFirst": true,
+  "healFirstLo": 0.85,
+  "healFirstHi": 0.97,
+  "coverReload": true,
+  "engGate": true,
+  "engGateR": 180,
+  "engGateLaserR": 200,
+  "engGateHp": 0.6,
+  "ffaClock": true,
+  "ffaClockT": 1795363200
 }
