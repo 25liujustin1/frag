@@ -29,6 +29,9 @@ export class Nav {
   private heapN = 0
   /** extra per-node cost multiplier (exposure, threat); 0 = none */
   readonly cost: Float32Array
+  /** extra route cost: open ground (static) and enemy sight lines (updated by the bot) */
+  expCost!: Float32Array
+  threatCost!: Float32Array
   /** per-node clearance, and the minimum clearance the current mech needs (set each tick by the bot) */
   clearN!: Float32Array
   dynClear = 0
@@ -97,6 +100,8 @@ export class Nav {
     this.heap = new Int32Array(n2 * 2)
     this.heapF = new Float32Array(n2 * 2)
     this.cost = new Float32Array(n2)
+    this.expCost = new Float32Array(n2)
+    this.threatCost = new Float32Array(n2)
     // clearance (m) at each node: lets the planner respect a mech that grew with cubes
     this.clearN = new Float32Array(n2)
     for (let J = 0; J < this.ny; J++) for (let I = 0; I < this.nx; I++) this.clearN[J * this.nx + I] = this.clear[2 * J * r.nx + 2 * I]
@@ -133,7 +138,7 @@ export class Nav {
     if (s < 0 || !this.walk[s]) return null
     const gen = ++this.gen
     const nx = this.nx, tx = t % nx, ty = Math.floor(t / nx)
-    const g = this.g, par = this.parent, st = this.stamp, cl = this.closed, walk = this.walk, cost = this.cost
+    const g = this.g, par = this.parent, st = this.stamp, cl = this.closed, walk = this.walk, cost = this.cost, ec = this.expCost, tc = this.threatCost
     this.heapN = 0
     g[s] = 0; par[s] = -1; st[s] = gen
     const h = (n: number) => {
@@ -158,7 +163,7 @@ export class Nav {
         const v = vj * nx + vi
         if (!walk[v] || cl[v] === gen || this.clearN[v] < this.dynClear) continue
         if (di !== 0 && dj !== 0 && (!walk[uj * nx + vi] || !walk[vj * nx + ui])) continue // no corner cutting
-        const ng = g[u] + STEP[k] * (1 + cost[v])
+        const ng = g[u] + STEP[k] * (1 + cost[v] + ec[v] + tc[v])
         if (st[v] !== gen || ng < g[v]) {
           st[v] = gen; g[v] = ng; par[v] = u
           this.push(v, ng + h(v))

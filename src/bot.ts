@@ -52,6 +52,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private threatCostT = -99
+  private threatNodes: number[] = []
   private myRad = 2.5
   private jumpZ = 0
   private myKills = 0
@@ -88,7 +90,55 @@ export class Bot {
     const m = hello.config.mech
     this.nav = new Nav(this.r, { height: m.height, stepUp: m.step_up, minClear: m.radius + 0.5 })
     log(`map ${dir} loaded in ${(performance.now() - t0).toFixed(0)} ms`)
+    if (P.routeExpW > 0) this.buildExposure()
     this.warmup()
+  }
+
+  /** Static route cost: how open each spot is (fraction of 16 directions you can be seen from out to 100 m). */
+  private buildExposure(): void {
+    const nav = this.nav, r = this.r, t0 = performance.now()
+    for (let J = 0; J < nav.ny; J += 2) for (let I = 0; I < nav.nx; I += 2) {
+      const n = J * nav.nx + I
+      if (!nav.walk[n]) continue
+      const x = nav.nodeX(n), y = nav.nodeY(n), z = nav.floor[r.cellOf(x, y)] + 6
+      let open = 0
+      for (let q = 0; q < 16; q++) {
+        const a = (q / 16) * Math.PI * 2
+        if (r.los(x, y, z, x + Math.cos(a) * 100, y + Math.sin(a) * 100, z, 2)) open++
+      }
+      const c = (P.routeExpW * open) / 16
+      for (let dj = 0; dj < 2; dj++) for (let di = 0; di < 2; di++) { const m = (J + dj) * nav.nx + I + di; if (I + di < nav.nx && J + dj < nav.ny) nav.expCost[m] = c }
+    }
+    log(`exposure map ${(performance.now() - t0).toFixed(0)} ms`)
+  }
+
+  /** Dynamic route cost: ground that any recently seen enemy can see (within 160 m of us), refreshed each second. */
+  private updateThreatCost(obs: Observation): void {
+    const nav = this.nav
+    if (P.routeThreatW <= 0 || obs.t - this.threatCostT < 1) return
+    this.threatCostT = obs.t
+    for (const n of this.threatNodes) nav.threatCost[n] = 0
+    this.threatNodes = []
+    const eyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 10).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8])
+    if (!eyes.length) return
+    const pos = obs.self.pos, r = this.r
+    for (let dy = -160; dy <= 160; dy += 8) for (let dx = -160; dx <= 160; dx += 8) {
+      if (dx * dx + dy * dy > 160 * 160) continue
+      const x = pos[0] + dx, y = pos[1] + dy, n0 = nav.nodeAt(x, y)
+      if (n0 < 0 || !nav.walk[n0]) continue
+      const z = nav.floor[r.cellOf(x, y)] + 4.5
+      let seen = false
+      for (const e of eyes) if (Math.hypot(e[0] - x, e[1] - y) < 230 && r.los(e[0], e[1], e[2], x, y, z, 1)) { seen = true; break }
+      if (!seen) continue
+      const I0 = n0 % nav.nx, J0 = (n0 - I0) / nav.nx
+      for (let j = -2; j < 2; j++) for (let i = -2; i < 2; i++) {
+        const I = I0 + i, J = J0 + j
+        if (I < 0 || J < 0 || I >= nav.nx || J >= nav.ny) continue
+        const m = J * nav.nx + I
+        nav.threatCost[m] = P.routeThreatW
+        this.threatNodes.push(m)
+      }
+    }
   }
 
   /** Exercise the hot paths so the JIT has compiled them before the first real decision. */
@@ -112,6 +162,7 @@ export class Bot {
     const act: Omit<Action, "tick"> = {}
 
     this.updateTracks(obs)
+    this.updateThreatCost(obs)
     {
       const cfgc = this.hello.config
       this.myRad = cfgc.mech.radius * (1 + (cfgc.cubes.size_per_cube ?? 0.05) * obs.self.cubes)
