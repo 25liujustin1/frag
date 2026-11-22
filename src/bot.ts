@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number } }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; threatT?: number; approach?: { t: number; d0: number } }
 
 export class Bot {
   name: string = P.name
@@ -316,7 +316,7 @@ export class Bot {
     let bestScore = Infinity
     // mechs already fighting us (they hit us, or we hit them, recently). While any of them is in view,
     // only they are targets: never wake up a fresh enemy mid-fight.
-    const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory) }
+    const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory || (P.behaviorThreat && (tr.threatT ?? -99) > t - 2)) }
     let hostileNear = enemies.some((m) => !this.isPassive(m.id) && dist2(m.pos, pos) < P.engageRange)
     // just escaped a chase: no new fights with passive bots for a while (hostiles out of sight are still around)
     if (P.calmT > 0 && !hostileNear && (t - this.lastDmgT < P.calmT || [...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.calmT && dist2(tr.pos, pos) < 250))) hostileNear = true
@@ -931,6 +931,12 @@ export class Bot {
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
+      if (P.behaviorThreat && m.kind === "mech") {
+        const me0 = obs.self.pos, dx = me0[0] - m.pos[0], dy = me0[1] - m.pos[1], d = Math.hypot(dx, dy)
+        const aimingAtUs = !!m.aim && d < P.btAimR && angDiff(m.aim[0], Math.atan2(dy, dx)) < Math.max(0.12, Math.atan2(5, Math.max(d, 1)))
+        const closing = d > 1 && m.vel ? ((m.vel[0] * dx + m.vel[1] * dy) / d) : 0
+        if (aimingAtUs || (closing > P.btClosing && d < P.btCloseR) || d < P.btNear) tr.threatT = obs.t
+      }
     }
     for (const [id, tr] of this.tracks) if (obs.t - tr.seenT > 30) this.tracks.delete(id)
     // pickups: remember what we see; forget ones that should be visible nearby but are not
@@ -1502,6 +1508,7 @@ export class Bot {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
     if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
+    if (P.behaviorThreat && (tr.threatT ?? -99) > this.nowT - 3) return false // aiming at us / closing in: a threat
     if (P.passiveNear > 0) {
       // a bot that has walked up close, or is closing in on us, is a threat whether or not it has fired yet
       const d = dist2(tr.pos, this.myPos)

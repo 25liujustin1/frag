@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11p-laser",
+  "name": "mr-v11z",
   "upgrades": [
     "armor",
     "plating",
@@ -301,5 +301,10 @@
   "wedgeClear": 1,
   "passiveNear": 80,
   "passiveClosing": 30,
-  "climbStall": 3
+  "climbStall": 3,
+  "behaviorThreat": true,
+  "btAimR": 190,
+  "btClosing": 3,
+  "btCloseR": 180,
+  "btNear": 40
 }
