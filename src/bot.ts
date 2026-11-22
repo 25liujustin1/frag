@@ -53,6 +53,7 @@ export class Bot {
   private escaping = false
   private curTarget = -1
   private myKills = 0
+  private survNow = false
   ffa = false
   ffaT = -1
   private ambushing = false
@@ -120,6 +121,8 @@ export class Bot {
     // ---- which game is this? In practice the house squad never kills itself, so before the zone can kill
     // anyone (~125 s) every death is ours. A mech dying that we didn't kill means a free-for-all (finals).
     for (const e of obs.events) if (e.type === "kill") this.myKills++
+    // survivor mode: always (P.survivor), or switch to it late (time) or after enough kills (hybrid)
+    this.survNow = !!P.survivor || t >= P.survAfterT || this.myKills >= P.survAfterKills
     if (!this.ffa && P.ffaDetect && t < P.ffaDetectT && obs.alive + this.myKills <= (this.hello.config.match.mechs ?? 16) - P.ffaDeaths) { this.ffa = true; this.ffaT = t }
     // sounds that suggest an approaching or firing mech (most recent, nearest band first)
     for (const s of obs.sounds) {
@@ -153,7 +156,7 @@ export class Bot {
       // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
       // (very close mechs), or fight it out in the endgame.
       pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
-    } else if (P.survivor && !this.ffa && !fighting.length) {
+    } else if (this.survNow && !this.ffa && !fighting.length) {
       // survivor (practice experiment): never start a fight; only fight back, or finish a badly hurt mech
       pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.survWeakFrac || dist2(m.pos, pos) < P.survCloseRange)
     }
@@ -310,7 +313,7 @@ export class Bot {
     // escape: low HP + any recent threat → get out of sight and stay out until healed. Nothing else.
     const recentTracks = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < P.escapeMemory)
     const threatRecent = enemies.length > 0 || underFire || recentTracks.length > 0
-    if (!this.escaping && me.hp < me.max_hp * (this.ffa ? P.ffaEscapeHp : P.survivor ? P.survEscapeHp : P.escapeHpFrac) && threatRecent) this.escaping = true
+    if (!this.escaping && me.hp < me.max_hp * (this.ffa ? P.ffaEscapeHp : this.survNow ? P.survEscapeHp : P.escapeHpFrac) && threatRecent) this.escaping = true
     if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
     const zoneSlack = zoneGoal ? this.zoneSlack(obs, zoneGoal) : Infinity
     const grab = P.grab && !outside && !this.escaping && t - this.lastDmgT > P.grabQuiet && me.hp > me.max_hp * P.grabMinHp ? this.grabGoal(obs, slots, pos, enemies) : null
@@ -499,6 +502,9 @@ export class Bot {
       if (!me.grounded && me.energy > 8) boost = true
     }
 
+    // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
+    if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
+    if (!Number.isFinite(aim[0]) || !Number.isFinite(aim[1])) aim = [me.aim[0], 0]
     const len = Math.hypot(move[0], move[1])
     if (len > 1) move = [move[0] / len, move[1] / len]
     act.move = [round3(move[0]), round3(move[1])]
@@ -587,7 +593,7 @@ export class Bot {
     const z = obs.zone, pos = obs.self.pos
     const c = z.next_center, R = z.next_radius
     // final phases: stand at the exact centre (the last mech inside the closing circle outlives the rest)
-    const inner = R <= P.finalCenterR ? 1.5 : Math.max(R * P.zoneInnerFrac, Math.min(R, 6))
+    const inner = R <= P.finalCenterR ? 1.5 : Math.max(R * (this.survNow ? P.survZoneInnerFrac : P.zoneInnerFrac), Math.min(R, 6))
     const d = dist2(c, pos)
     if (d <= inner) return null
     const k = inner / d
@@ -802,7 +808,7 @@ export class Bot {
     const key = `${z.next_center[0]},${z.next_center[1]},${z.next_radius}`
     const h = this.hold
     if (h && h.key === key && obs.t - h.t < 25) return h
-    const inner = Math.max(z.next_radius * P.zoneInnerFrac, 6)
+    const inner = Math.max(z.next_radius * (this.survNow ? P.survZoneInnerFrac : P.zoneInnerFrac), 6)
     let best: { x: number; y: number; face: number } | null = null, bs = Infinity
     for (const R of [0, 10, 20, 32, 45]) {
       for (let k = 0; k < (R ? 12 : 1); k++) {
@@ -893,9 +899,14 @@ export class Bot {
       const a = (k / 16) * Math.PI * 2
       const cx = Math.cos(a), cy = Math.sin(a)
       // room to move this way: up to 9 m; short gaps are allowed (penalised) so a cornered bot still moves
-      const free = this.freeLen(pos, cx, cy, 9)
-      if (free > maxFree) { maxFree = free; maxFreeDir = [cx, cy] }
-      if (free < 3) continue
+      // normal case: exactly v9.2's room check. The free length is only measured when that fails,
+      // so a fully cornered bot can still pick the roomiest way out (fallback below).
+      if (!this.roomAlong(pos, cx, cy, 9)) {
+        const free = this.freeLen(pos, cx, cy, 9)
+        if (free > maxFree) { maxFree = free; maxFreeDir = [cx, cy] }
+        continue
+      }
+      const free = 9
       const along = Math.cos(a - toT) // +1 toward target
       const side = Math.sin(a - toT) // +1 = left of the target line
       let s = radial * along * 2 + side * j * 1.2 - (radial === 0 ? Math.abs(along) * 0.6 : 0)
@@ -914,7 +925,7 @@ export class Bot {
       const zr = dist2(z.center, [nx, ny])
       if (zr > z.radius - 8) s -= 3
       if (dist2(z.next_center, [nx, ny]) > z.next_radius && dist2(z.next_center, pos) > z.next_radius * 0.9) s -= Math.cos(a - Math.atan2(z.next_center[1] - pos[1], z.next_center[0] - pos[0])) < 0 ? 1.5 : 0
-      s -= (9 - free) * 0.3
+      s -= (9 - free) * P.cornerPenalty
       if (s > bs) { bs = s; best = [cx, cy] }
     }
     // cornered (no direction with 3 m of room): take the roomiest direction, or walk back onto the nav grid
