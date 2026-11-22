@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11u",
+  "name": "mr-v11v",
   "upgrades": [
     "armor",
     "plating",
@@ -303,7 +303,7 @@
   "recoverHitT": 4,
   "passiveSplit": false,
   "recoverOdds": 3,
-  "crateCalmT": 8,
+  "crateCalmT": 0,
   "huntPath": false,
   "huntMemT": 30,
   "huntMax": 3,
@@ -312,6 +312,13 @@
   "huntSpotW": 1,
   "retreatHold": 0,
   "noWake": false,
-  "laserLethal": true,
-  "laserLethalMargin": 0.85
+  "laserLethal": false,
+  "laserLethalMargin": 0.85,
+  "antiLight": true,
+  "antiLightR": 59,
+  "antiLightW": 6,
+  "antiLightMem": 6,
+  "laserPunish": false,
+  "laserPunishT": 1.5,
+  "laserPunishOdds": 2
 }

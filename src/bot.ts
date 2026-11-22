@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number } }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number }; laserFiredT?: number }
 
 export class Bot {
   name: string = P.name
@@ -54,6 +54,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private antiLights: V3[] = []
   private retreatDir: V2 | null = null
   private retreatDirT = -99
   private huntCost: Float32Array | null = null
@@ -262,6 +263,8 @@ export class Bot {
 
     if (this.recentHits.length && this.recentHits[0].t < obs.t - 5) this.recentHits = this.recentHits.filter((h) => h.t > obs.t - 5)
     this.myPos = obs.self.pos as V3; this.nowT = obs.t
+    this.antiLights = []
+    if (P.antiLight && !this.hasLight) for (const tr of this.tracks.values()) if (tr.id < 100 && obs.t - tr.seenT < P.antiLightMem && tr.weapons.includes("lightning")) this.antiLights.push(tr.pos)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -551,7 +554,10 @@ export class Bot {
     // edge run (start of match): head for the edge first. Keep shooting whatever we target, but don't close in.
     if (P.edgeMode && !this.edgeDone && (t > P.edgeMaxT || (t > 3 && !zoneGoal))) this.edgeDone = true
     const edgeRun = P.edgeMode && !this.edgeDone
-    const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
+    let odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
+    // laser-cooldown punish: the target just fired its laser and can't again for ~1.65 s -> press, don't retreat from it
+    const punish = P.laserPunish && !!target && target.kind === "mech" && t - (this.tracks.get(target.id)?.laserFiredT ?? -99) < P.laserPunishT
+    if (punish) odds *= P.laserPunishOdds
     // free-for-all (qualifying/final): survival first. Retreat earlier, come back healthier, flee sooner.
     const ffaSafe = this.ffa && P.ffaSurvive && obs.alive > P.ffaEndgameAlive
     const retreatOdds = ffaSafe ? P.ffaRetreatOdds : P.retreatOdds
@@ -725,7 +731,7 @@ export class Bot {
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
       const tw = target.weapons ?? []
       // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
-      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
+      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], P.antiLight ? P.antiLightR : 55), Math.max(band[1], 100)]
       else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
       // can anything fire soon? (gun loaded, laser off cooldown, lightning in range with energy)
       const ready = slots.some((w) => {
@@ -745,7 +751,7 @@ export class Bot {
       const recovering = P.recoverHp > 0 && !pushing && me.hp < me.max_hp * P.recoverHp && t - this.lastDmgT > P.recoverHitT && odds < P.recoverOdds
       this.recovering = recovering
       if (recovering) this.recoverSeenT = t
-      const readyR = ready && !recovering
+      const readyR = (ready && !recovering) || punish
       move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, readyR || pushing)
       if (P.posScore) {
         const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < (P.kite ? P.kiteMemT : 8) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -1007,6 +1013,7 @@ export class Bot {
       if (P.passiveNear > 0) { const d = dist2(m.pos, obs.self.pos); if (!tr.approach || obs.t - tr.approach.t > 5) tr.approach = { t: obs.t, d0: d } }
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
+      if (tr.charging && !m.charging && (tr.weapons ?? []).includes("laser")) tr.laserFiredT = obs.t // its laser just went off: ~1.65 s cooldown
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
     }
     for (const [id, tr] of this.tracks) if (obs.t - tr.seenT > 30) this.tracks.delete(id)
@@ -1225,7 +1232,7 @@ export class Bot {
     }
     if (this.wantCubes(obs.self.cubes)) for (const c of this.cubeMem.values()) {
       const d = dist2(c, pos)
-      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
+      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
       let n = 0
       for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
       const s = n * P.grabCubeV - d
@@ -1236,7 +1243,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d)) continue
+      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       const s = take.gain * P.grabWeaponV - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
@@ -1280,7 +1287,7 @@ export class Bot {
       let bc: V3 | null = null, bcs = -Infinity
       for (const c of this.cubeMem.values()) {
         const d = dist2(c, pos)
-        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c)) continue
+        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
         let n = 0
         for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
         const s = n * 40 - d * 0.5
@@ -1301,7 +1308,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > range || !this.inZoneSoon(obs, p.pos)) continue
+      if (d > range || !this.inZoneSoon(obs, p.pos) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       let climb: V2 | undefined
       if (this.badLoot.has(id)) continue
       if (!this.reachable(p.pos)) {
@@ -1776,6 +1783,7 @@ export class Bot {
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
         if (P.huntPath && this.huntCost) { const hn = this.nav.nodeAt(x, y); if (hn >= 0) s += P.huntSpotW * this.huntCost[hn] }
+        if (P.antiLight) for (const l of this.antiLights) if (Math.hypot(l[0] - x, l[1] - y) < P.antiLightR) { s += P.antiLightW; break }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
