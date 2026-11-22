@@ -832,7 +832,9 @@ export class Bot {
         this.islandCheckT = t
         const need = nav.dynClear
         nav.dynClear = 0
-        this.offMain = me.grounded ? nav.nearestWalkable(pos[0], pos[1], 2) < 0 : this.offMain
+        // stranded: off the route map, or wedged where our own cell has no room to move (landed in a slot)
+        const wedged = P.wedgeClear > 0 && this.nav.clear[this.r.cellOf(pos[0], pos[1])] < P.wedgeClear
+        this.offMain = me.grounded ? nav.nearestWalkable(pos[0], pos[1], 2) < 0 || wedged : this.offMain
         nav.dynClear = need
         if (!this.offMain) { this.islandTried.clear(); this.islandDir = null }
         else if (me.grounded && (!this.islandDir || (t - this.islandDirT > P.islandRetry && dist2(pos, this.islandFrom) < 6))) {
