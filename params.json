@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11y",
+  "name": "mr-v11p-laser",
   "upgrades": [
     "armor",
     "plating",
@@ -25,7 +25,7 @@
     "laser_pierce"
   ],
   "weaponPref": {
-    "laser": 3,
+    "laser": 6,
     "lightning": 2,
     "mortar": 1,
     "gun": 0
@@ -266,6 +266,8 @@
   "edgeHoldMinR": 140,
   "edgeLootR": 120,
   "edgeFfaOnly": true,
+  "ffaClock": true,
+  "ffaClockT": 1795363200,
   "lightAvoid": false,
   "lightAvoidR": 55,
   "lightAvoidW": 3,
@@ -299,20 +301,5 @@
   "wedgeClear": 1,
   "passiveNear": 80,
   "passiveClosing": 30,
-  "climbStall": 3,
-  "antiLight": true,
-  "antiLightR": 59,
-  "antiLightW": 6,
-  "antiLightMem": 6,
-  "roofCamp": false,
-  "roofMinH": 6,
-  "roofMaxH": 30,
-  "roofR": 70,
-  "roofAfterT": 30,
-  "roofMinHp": 0.5,
-  "roofZoneMargin": 30,
-  "roofClimbT": 15,
-  "rearArcW": 3,
-  "rearArcR": 160,
-  "backTurnedW": 0.33
+  "climbStall": 3
 }
