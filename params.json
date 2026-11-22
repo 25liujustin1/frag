@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9h",
+  "name": "mr-v9.9i",
   "upgrades": [
     "armor",
     "plating",
@@ -197,6 +197,16 @@
   "dropEdgeMargin": 20,
   "unstickOpen": true,
   "unstickT": 1.5,
-  "routeNearW": 2,
-  "routeNearR": 60
+  "routeNearW": 0,
+  "routeNearR": 60,
+  "passiveTrack": true,
+  "passiveAfter": 8,
+  "checkSix": false,
+  "checkEvery": 2.5,
+  "checkDur": 0.5,
+  "fleeTail": true,
+  "fleeHp": 0.35,
+  "fleeExitHp": 0.7,
+  "fleeMaxT": 40,
+  "fleeQuiet": 6
 }
