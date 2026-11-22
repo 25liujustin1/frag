@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11x",
+  "name": "mr-v11y",
   "upgrades": [
     "armor",
     "plating",
@@ -311,5 +311,8 @@
   "roofAfterT": 30,
   "roofMinHp": 0.5,
   "roofZoneMargin": 30,
-  "roofClimbT": 15
+  "roofClimbT": 15,
+  "rearArcW": 3,
+  "rearArcR": 160,
+  "backTurnedW": 0.33
 }

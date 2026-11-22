@@ -345,6 +345,8 @@ export class Bot {
       const tr = this.tracks.get(m.id)
       const losOk = this.r.los(muzzle[0], muzzle[1], muzzle[2], m.pos[0], m.pos[1], m.pos[2] + centerZ(m))
       let s = d / 60 + (m.hp ?? 1000) / 700
+      // back turned to us: our hits on its back do x1.5, so it dies a third faster
+      if (P.backTurnedW > 0 && m.kind === "mech" && m.aim && angDiff(m.aim[0], Math.atan2(pos[1] - m.pos[1], pos[0] - m.pos[0])) > Math.PI / 2) s -= P.backTurnedW * (m.hp ?? 1000) / 700
       if (!losOk) s += 3
       if (P.attackerFirst) {
         // whoever is shooting us comes first (weakest attacker first, via the hp term); passive bots wait
@@ -1740,6 +1742,15 @@ export class Bot {
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
         if (P.antiLight) for (const l of this.antiLights) if (Math.hypot(l[0] - x, l[1] - y) < P.antiLightR) { s += P.antiLightW; break }
+        // rear arc: facing the target from here, other bots more than 90 deg off our aim would hit our back (x1.5)
+        if (P.rearArcW > 0) {
+          const fa = Math.atan2(tc[1] - y, tc[0] - x)
+          for (const th of threats) {
+            if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue
+            const dd = Math.hypot(th[0] - x, th[1] - y)
+            if (dd < P.rearArcR && angDiff(Math.atan2(th[1] - y, th[0] - x), fa) > Math.PI / 2) s += P.rearArcW * (1 - dd / P.rearArcR)
+          }
+        }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
