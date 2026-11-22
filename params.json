@@ -1,5 +1,5 @@
 {
-  "name": "mr-final-laser",
+  "name": "mr-final-tc2",
   "upgrades": [
     "armor",
     "plating",
@@ -151,7 +151,7 @@
   "survivor": false,
   "survWeakFrac": 0.3,
   "survCloseRange": 40,
-  "survEscapeHp": 0.4,
+  "survEscapeHp": 0.3,
   "survZoneInnerFrac": 0.3,
   "survAfterT": 99999,
   "survAfterKills": 99,
