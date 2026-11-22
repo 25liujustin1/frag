@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9e",
+  "name": "mr-v9.9f",
   "upgrades": [
     "armor",
     "plating",
@@ -160,7 +160,7 @@
   "grabCloseOk": 15,
   "retreatV2": false,
   "coverCommit": 2,
-  "threatPic": true,
+  "threatPic": false,
   "threatMem": 10,
   "comingW": 0.5,
   "zoneOddsW": 0.5,
@@ -185,5 +185,11 @@
   "pkMaxT": 15,
   "pkExitHp": 0.85,
   "peekDiscipline": false,
-  "peekMultiW": 1.5
+  "peekMultiW": 1.5,
+  "seek": true,
+  "seekMinHp": 0.7,
+  "seekMem": 30,
+  "seekCrowdW": 60,
+  "seekCenterR": 40,
+  "seekZoneSlack": 20
 }

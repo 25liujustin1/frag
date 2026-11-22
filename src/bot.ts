@@ -517,6 +517,7 @@ export class Bot {
       // loot or rotate
       const loot = this.lootGoal(obs, slots, zoneGoal, needWeapon && !crateGoal)
       const dropAt = this.dropGoal(obs, pos, enemies)
+      const seek = this.seekGoal(obs, pos)
       // scout jump: jet straight up and spin to spot loot on roofs and behind buildings
       const knowsWeapon = loot?.takeId != null
       const quiet = ![...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < P.scoutQuiet)
@@ -549,6 +550,10 @@ export class Bot {
           act.take = loot.takeId
           if (loot.drop != null) act.drop = loot.drop
         }
+      } else if (seek && !outside && (!zoneGoal || zoneSlack > P.seekZoneSlack)) {
+        // seek and destroy: go find the next bot (last known position, gunfire, or where the squad gathers)
+        this.mode = "seek"
+        move = this.followTo(seek, pos, t)
       } else if (zoneGoal) {
         this.mode = outside ? "zone!" : "rotate"
         move = this.followTo(zoneGoal, pos, t)
@@ -718,6 +723,32 @@ export class Bot {
     if (d <= inner) return null
     const k = inner / d
     return [c[0] + (pos[0] - c[0]) * k, c[1] + (pos[1] - c[1]) * k]
+  }
+
+  /**
+   * Seek and destroy: where to look for the next bot. The last known position of the nearest
+   * (and least crowded) enemy seen recently; else recent gunfire/footsteps; else the next zone's centre.
+   * Positions we reach without finding anyone are dropped so we move on.
+   */
+  private seekGoal(obs: Observation, pos: V3): V2 | null {
+    if (!P.seek || this.ffa || obs.self.hp < obs.self.max_hp * P.seekMinHp) return null
+    const t = obs.t
+    const cands = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < P.seekMem && t - tr.seenT > 0.5)
+    let best: V2 | null = null, bs = Infinity
+    for (const tr of cands) {
+      if (!this.inZoneSoon(obs, tr.pos)) continue
+      const d = dist2(tr.pos, pos)
+      if (d < 15) { this.tracks.delete(tr.id); continue } // looked there, nobody: forget it
+      let crowd = 0
+      for (const o of cands) if (o !== tr && dist2(o.pos, tr.pos) < 60) crowd++
+      const s = d + crowd * P.seekCrowdW
+      if (s < bs) { bs = s; best = [tr.pos[0], tr.pos[1]] }
+    }
+    if (best) return best
+    const snd = this.soundContacts.filter((sc) => t - sc.t < 15 && dist2(sc.pos, pos) > 15)
+    if (snd.length) { const sc = snd[snd.length - 1]; return [sc.pos[0], sc.pos[1]] }
+    const c = obs.zone.next_center
+    return dist2(c, pos) > P.seekCenterR ? [c[0], c[1]] : null
   }
 
   /**
