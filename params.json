@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11s",
+  "name": "mr-v11t",
   "upgrades": [
     "armor",
     "plating",
@@ -299,12 +299,12 @@
   "passiveNear": 80,
   "passiveClosing": 30,
   "climbStall": 3,
-  "recoverHp": 0.6,
+  "recoverHp": 0,
   "recoverHitT": 4,
   "passiveSplit": false,
   "recoverOdds": 3,
-  "crateCalmT": 8,
-  "huntPath": false,
+  "crateCalmT": 0,
+  "huntPath": true,
   "huntMemT": 30,
   "huntMax": 3,
   "huntBudget": 6000,
