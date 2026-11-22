@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9i",
+  "name": "mr-v9.9j",
   "upgrades": [
     "armor",
     "plating",
@@ -199,14 +199,20 @@
   "unstickT": 1.5,
   "routeNearW": 0,
   "routeNearR": 60,
-  "passiveTrack": true,
+  "passiveTrack": false,
   "passiveAfter": 8,
   "checkSix": false,
   "checkEvery": 2.5,
   "checkDur": 0.5,
-  "fleeTail": true,
+  "fleeTail": false,
   "fleeHp": 0.35,
   "fleeExitHp": 0.7,
   "fleeMaxT": 40,
-  "fleeQuiet": 6
+  "fleeQuiet": 6,
+  "standoffT": 0,
+  "standoffIgnore": 10,
+  "attackerFirst": true,
+  "attackerWindow": 5,
+  "attackerPri": 4,
+  "nonAttackerPen": 2
 }

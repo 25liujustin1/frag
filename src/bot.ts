@@ -52,6 +52,10 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private hitBy = new Map<number, number>()
+  private targetSinceT = 0
+  private lastShotT = 0
+  private ignoreUntil = new Map<number, number>()
   private fleeing = false
   private fleeT = 0
   private fleeDest: V2 | null = null
@@ -201,6 +205,7 @@ export class Bot {
         if (e.bearing != null) this.lastDmgBearing = e.bearing
         const tr = e.by != null ? this.tracks.get(e.by) : undefined
         if (tr) tr.hitUsT = t
+        if (e.by != null) this.hitBy.set(e.by, t) // remember even if we haven't seen the shooter yet
       } else if (e.type === "hit") {
         const tr = this.tracks.get(e.target)
         if (tr) tr.weHitT = t
@@ -250,6 +255,7 @@ export class Bot {
       ![...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < P.farmQuiet)
     if (quietForFarm) for (const m of obs.mechs) if (m.kind === "npc" && !npcsAttacking.includes(m) && dist2(m.pos, pos) < P.farmRange) npcsAttacking.push(m)
     let target: ActorObs | null = null
+    const anyAttacker = enemies.some((m) => (this.tracks.get(m.id)?.hitUsT ?? -99) > t - P.attackerWindow)
     let bestScore = Infinity
     // mechs already fighting us (they hit us, or we hit them, recently). While any of them is in view,
     // only they are targets: never wake up a fresh enemy mid-fight.
@@ -258,6 +264,8 @@ export class Bot {
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
     let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
     if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !this.isPassive(m.id))
+    // standoff: a target we've held for a while without firing a shot is dropped for a bit (unless it's shooting us)
+    if (P.standoffT > 0) pool = pool.filter((m) => !((this.ignoreUntil.get(m.id) ?? -1) > t) || (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 3)
     if (this.ffa && !fighting.length) {
       // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
       // (very close mechs), or fight it out in the endgame.
@@ -273,11 +281,20 @@ export class Bot {
       const losOk = this.r.los(muzzle[0], muzzle[1], muzzle[2], m.pos[0], m.pos[1], m.pos[2] + centerZ(m))
       let s = d / 60 + (m.hp ?? 1000) / 700
       if (!losOk) s += 3
-      if (tr && tr.hitUsT > t - 3) s -= 1.5
-      if (m.id === this.curTarget) s -= P.targetStick // finish what we started
+      if (P.attackerFirst) {
+        // whoever is shooting us comes first (weakest attacker first, via the hp term); passive bots wait
+        const attacking = !!tr && tr.hitUsT > t - P.attackerWindow
+        if (attacking) s -= P.attackerPri
+        else if (anyAttacker) s += P.nonAttackerPen
+        if (m.id === this.curTarget && (attacking || !anyAttacker)) s -= P.targetStick
+      } else {
+        if (tr && tr.hitUsT > t - 3) s -= 1.5
+        if (m.id === this.curTarget) s -= P.targetStick // finish what we started
+      }
       if (m.kind === "npc") s += 2
       if (s < bestScore) { bestScore = s; target = m }
     }
+    if (target && target.id !== this.curTarget) this.targetSinceT = t
     this.curTarget = target ? target.id : -1
     const tgtDist = target ? dist2(target.pos, pos) : Infinity
     const tgtCenter: V3 | null = target ? [target.pos[0], target.pos[1], target.pos[2] + centerZ(target)] : null
@@ -608,6 +625,10 @@ export class Bot {
         move = [move[0] * 0.6 + Math.cos(perp) * j * 0.8, move[1] * 0.6 + Math.sin(perp) * j * 0.8]
       }
     }
+    if (fire[0] || fire[1]) this.lastShotT = t
+    if (P.standoffT > 0 && target && target.kind === "mech" && t - this.targetSinceT > P.standoffT && t - this.lastShotT > P.standoffT) {
+      this.ignoreUntil.set(target.id, t + P.standoffIgnore); this.targetSinceT = t
+    }
     // healing after a kill: hold fire unless shot (dealing damage restarts the 5 s regen delay)
     if (this.mode === "heal" && !underFire) { fire[0] = false; fire[1] = false }
     // never charge the laser while escaping (it halves our speed); the gun keeps firing
@@ -709,7 +730,7 @@ export class Bot {
     for (const m of obs.mechs) {
       let tr = this.tracks.get(m.id)
       if (!tr) {
-        tr = { id: m.id, pos: m.pos as V3, vel: m.vel as V3, aim: m.aim as V2, hp: m.hp ?? 0, maxHp: m.max_hp ?? 0, cubes: m.cubes ?? 0, weapons: m.weapons ?? [], charging: !!m.charging, seenT: obs.t, hitUsT: -99, weHitT: -99, watchT: 0 }
+        tr = { id: m.id, pos: m.pos as V3, vel: m.vel as V3, aim: m.aim as V2, hp: m.hp ?? 0, maxHp: m.max_hp ?? 0, cubes: m.cubes ?? 0, weapons: m.weapons ?? [], charging: !!m.charging, seenT: obs.t, hitUsT: this.hitBy.get(m.id) ?? -99, weHitT: -99, watchT: 0 }
         this.tracks.set(m.id, tr)
       }
       if (m.kind === "mech" && dist2(m.pos, obs.self.pos) < 150) tr.watchT += 0.1 // time we've had it in view nearby
