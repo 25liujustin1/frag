@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number }; laserFiredT?: number }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number } }
 
 export class Bot {
   name: string = P.name
@@ -54,16 +54,6 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
-  private ffaByClock = false
-  private enemyVisT = -99
-  private healFirstHold = false
-  private antiLights: V3[] = []
-  private retreatDir: V2 | null = null
-  private retreatDirT = -99
-  private huntCost: Float32Array | null = null
-  private huntNodes: number[] = []
-  private recoverSeenT = -99
-  private recovering = false
   private climbStillT = -1
   private myPos: V3 = [0, 0, 0]
   private nowT = 0
@@ -137,7 +127,6 @@ export class Bot {
 
   constructor(hello: Hello) {
     this.hello = hello
-    if (P.ffaClock) { const now = Date.now() / 1000; if (now >= P.ffaClockT && now < P.ffaClockT + 5 * 86400) { this.ffa = true; this.ffaByClock = true } }
     this.rng = new Rng(hello.seed)
     let dir = hello.map?.dir
     if (!dir || !existsSync(dir + "/v2/world.json")) dir = ROOT + "arena"
@@ -182,39 +171,6 @@ export class Bot {
     this.threatCostT = obs.t
     for (const n of this.threatNodes) nav.threatCost[n] = 0
     this.threatNodes = []
-    // hunter-path prediction: the routes recently seen hostiles would take to reach us are dangerous corridors
-    if (P.huntPath) {
-      if (!this.huntCost) this.huntCost = new Float32Array(nav.nx * nav.ny)
-      for (const n of this.huntNodes) this.huntCost[n] = 0
-      this.huntNodes = []
-      const me0 = obs.self.pos, need = nav.dynClear
-      nav.dynClear = 0
-      const goal = nav.nearestWalkable(me0[0], me0[1], 6)
-      nav.dynClear = need
-      if (goal >= 0) {
-        const hs = [...this.tracks.values()].filter((tr) => tr.id < 100 && !this.isPassive(tr.id) && obs.t - tr.seenT < P.huntMemT && dist2(tr.pos, me0) < 320 && dist2(tr.pos, me0) > 25)
-          .sort((a, b) => b.seenT - a.seenT).slice(0, P.huntMax)
-        for (const tr of hs) {
-          const st = nav.nearestWalkable(tr.pos[0], tr.pos[1], 6)
-          if (st < 0) continue
-          const res = nav.astar(st, goal, P.huntBudget, true)
-          if (!res) continue
-          const w = P.huntPathW * (1 - (obs.t - tr.seenT) / P.huntMemT)
-          for (const n of res.path) {
-            const nxp = nav.nodeX(n), nyp = nav.nodeY(n)
-            if (Math.hypot(nxp - me0[0], nyp - me0[1]) < 20) continue // the end of every route is us
-            const I0 = n % nav.nx, J0 = (n - I0) / nav.nx
-            for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
-              const I = I0 + i, J = J0 + j
-              if (I < 0 || J < 0 || I >= nav.nx || J >= nav.ny) continue
-              const m = J * nav.nx + I
-              if (w > this.huntCost[m]) { if (this.huntCost[m] === 0) this.huntNodes.push(m); this.huntCost[m] = w }
-            }
-          }
-        }
-        for (const m of this.huntNodes) { nav.threatCost[m] += this.huntCost[m]; this.threatNodes.push(m) }
-      }
-    }
     const eyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < (tr.hitUsT > 0 ? P.eyesHitT : 10) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8])
     const lights = this.lightCarriers(obs.t)
     if (!eyes.length && !lights.length) return
@@ -267,8 +223,6 @@ export class Bot {
 
     if (this.recentHits.length && this.recentHits[0].t < obs.t - 5) this.recentHits = this.recentHits.filter((h) => h.t > obs.t - 5)
     this.myPos = obs.self.pos as V3; this.nowT = obs.t
-    this.antiLights = []
-    if (P.antiLight && !this.hasLight) for (const tr of this.tracks.values()) if (tr.id < 100 && obs.t - tr.seenT < P.antiLightMem && tr.weapons.includes("lightning")) this.antiLights.push(tr.pos)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -311,8 +265,6 @@ export class Bot {
     // survivor mode: always (P.survivor), or switch to it late (time) or after enough kills (hybrid)
     this.survNow = !!P.survivor || t >= P.survAfterT || this.myKills >= P.survAfterKills
     if (!this.ffa && P.ffaDetect && t < P.ffaDetectT && obs.alive + this.myKills <= (this.hello.config.match.mechs ?? 16) - P.ffaDeaths) { this.ffa = true; this.ffaT = t }
-    // clock-set free-for-all, but by 1:00 nobody has died except bots we killed -> it is practice after all
-    if (this.ffaByClock && t >= 60 && obs.alive + this.myKills >= (this.hello.config.match.mechs ?? 16)) { this.ffa = false; this.ffaByClock = false }
     // sounds that suggest an approaching or firing mech (most recent, nearest band first)
     for (const s of obs.sounds) {
       if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
@@ -364,24 +316,8 @@ export class Bot {
     // just escaped a chase: no new fights with passive bots for a while (hostiles out of sight are still around)
     if (P.calmT > 0 && !hostileNear && (t - this.lastDmgT < P.calmT || [...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.calmT && dist2(tr.pos, pos) < 250))) hostileNear = true
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
-    if (enemies.length) this.enemyVisT = t
     let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
-    // 6) engagement range: new fights with uninvolved bots only when close enough and healthy enough
-    if (P.engGate && !fighting.length) pool = pool.filter((m) => {
-      if (m.kind === "npc") return true
-      const tr = this.tracks.get(m.id)
-      if (tr && (tr.hitUsT > t - 6 || engaged(m.id))) return true
-      return dist2(m.pos, pos) < (slots.some((w) => w?.kind === "laser") ? P.engGateLaserR : P.engGateR) && me.hp > me.max_hp * P.engGateHp
-    })
-    if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !(P.passiveSplit ? this.isPassiveTarget(m.id) : this.isPassive(m.id)))
-    // don't wake idle bots: only shoot bots that are hunting us (shot us, closing in, or already in a fight with us)
-    if (P.noWake) pool = pool.filter((m) => {
-      if (m.kind === "npc") return true
-      const tr = this.tracks.get(m.id)
-      if (!tr) return false
-      if (tr.hitUsT >= 0 || engaged(m.id)) return true
-      return tr.approach != null && tr.approach.t > t - 5 && tr.approach.d0 - dist2(m.pos, pos) > P.passiveClosing
-    })
+    if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !this.isPassive(m.id))
     // standoff: a target we've held for a while without firing a shot is dropped for a bit (unless it's shooting us)
     if (P.standoffT > 0) pool = pool.filter((m) => !((this.ignoreUntil.get(m.id) ?? -1) > t) || (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 3)
     if (this.ffa && !fighting.length) {
@@ -505,17 +441,7 @@ export class Bot {
           if (tgtLos) this.laserLostT = -1
           else if (this.laserLostT < 0) this.laserLostT = t
           const lostLong = this.laserLostT >= 0 && t - this.laserLostT > 1.2 && !this.ambushing
-          // partial lethal shot: if the charge so far already kills the target, release now
-          let lethalNow = false
-          if (P.laserLethal && tgtLos && target.kind === "mech") {
-            const st = laser.stats as any, ch = laser.charge ?? 0, minC = st.min_charge ?? 0.15, minF = st.min_frac ?? 0.35
-            if (ch >= minC) {
-              const frac = minF + (1 - minF) * clamp((ch - minC) / Math.max(1e-3, st.charge - minC), 0, 1)
-              const dmg = st.damage * frac * (1 + 0.04 * Math.min(me.cubes, 10))
-              lethalNow = (target.hp ?? 1e9) <= dmg * P.laserLethalMargin
-            }
-          }
-          if ((full || lethalNow) && tgtLos && aimErr(hitscanAim) < tol) fire[iLaser] = false // release → fires
+          if (full && tgtLos && aimErr(hitscanAim) < tol) fire[iLaser] = false // release → fires
           else if (lostLong || autoFireSoon) fire[iLaser] = false
           else fire[iLaser] = true
         } else if (laser.cooldown <= 0.05 && ((tgtLos && tgtDist < laser.stats.range * 0.97) || (this.ambushing && (tgtDist < P.prechargeDist || closing * 0.9 > tgtDist - P.prechargeDist)))) {
@@ -538,7 +464,6 @@ export class Bot {
     if (iGun >= 0) {
       const g = slots[iGun]!
       if ((g.reload ?? 0) <= 0 && ((g.ammo ?? 0) === 0 || ((g.ammo ?? 0) <= 4 && !tgtLos))) act.reload = true
-      if (P.coverReload && (g.reload ?? 0) <= 0 && !fire[iGun] && (g.ammo ?? 0) <= Math.round(0.6 * (g.stats.mag ?? 12)) && t - this.enemyVisT > 1.1) act.reload = true
     }
 
     // crate shooting when calm (cubes + loot)
@@ -547,11 +472,7 @@ export class Bot {
     this.gunOnly = gunOnly
     this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
-    // crates only when it's really calm: not retreating, no hit and no hostile seen for a while
-    if (P.healFirst) { if (me.hp < me.max_hp * P.healFirstLo) this.healFirstHold = true; else if (me.hp >= me.max_hp * P.healFirstHi) this.healFirstHold = false }
-    const crateCalm = (!P.healFirst || !this.healFirstHold) && (P.crateCalmT <= 0 || (!this.retreating && t - this.lastDmgT > P.crateCalmT &&
-      ![...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.crateCalmT)))
-    if (!target && !this.winHealing && crateCalm && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
+    if (!target && !this.winHealing && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
@@ -568,12 +489,11 @@ export class Bot {
     // ---- movement
     const zoneGoal = this.zoneGoal(obs)
     // edge run (start of match): head for the edge first. Keep shooting whatever we target, but don't close in.
-    if (P.edgeMode && !this.edgeDone && (t > P.edgeMaxT || (t > 3 && !zoneGoal))) this.edgeDone = true
-    const edgeRun = P.edgeMode && !this.edgeDone
-    let odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
-    // laser-cooldown punish: the target just fired its laser and can't again for ~1.65 s -> press, don't retreat from it
-    const punish = P.laserPunish && !!target && target.kind === "mech" && t - (this.tracks.get(target.id)?.laserFiredT ?? -99) < P.laserPunishT
-    if (punish) odds *= P.laserPunishOdds
+    // edgeFfaOnly: edge play only once the match is known to be a free-for-all (practice play unchanged)
+    const edgeOn = P.edgeMode && (!P.edgeFfaOnly || this.ffa)
+    if (edgeOn && !this.edgeDone && (t - (P.edgeFfaOnly ? this.ffaT : 0) > P.edgeMaxT || (t > 3 && !zoneGoal))) this.edgeDone = true
+    const edgeRun = edgeOn && !this.edgeDone
+    const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
     // free-for-all (qualifying/final): survival first. Retreat earlier, come back healthier, flee sooner.
     const ffaSafe = this.ffa && P.ffaSurvive && obs.alive > P.ffaEndgameAlive
     const retreatOdds = ffaSafe ? P.ffaRetreatOdds : P.retreatOdds
@@ -716,22 +636,6 @@ export class Bot {
           this.faceThreats = tp
         }
       }
-      // commit to an escape direction: don't flip-flop between two covers on opposite sides
-      if (P.retreatHold > 0) {
-        const ml = Math.hypot(move[0], move[1])
-        if (ml > 0.2) {
-          const nd: V2 = [move[0] / ml, move[1] / ml]
-          const old = this.retreatDir
-          if (old && t - this.retreatDirT < P.retreatHold && nd[0] * old[0] + nd[1] * old[1] < -0.2) {
-            // keep the old heading unless it's blocked or runs into a bot
-            const ahead: V2 = [pos[0] + old[0] * 12, pos[1] + old[1] * 12]
-            const blocked = !this.lineClear(pos[0], pos[1], ahead[0], ahead[1])
-            const intoBot = enemies.some((e) => dist2(e.pos, pos) < 60 && (e.pos[0] - pos[0]) * old[0] + (e.pos[1] - pos[1]) * old[1] > 0.7 * dist2(e.pos, pos))
-            if (!blocked && !intoBot) move = [old[0] * ml, old[1] * ml]
-            else { this.retreatDir = nd; this.retreatDirT = t }
-          } else if (!old || t - this.retreatDirT >= P.retreatHold || nd[0] * old[0] + nd[1] * old[1] >= -0.2) { this.retreatDir = nd; this.retreatDirT = t }
-        }
-      }
     } else if (this.winHealing && !outside) {
       // hide from every hostile seen or remembered, then stand still and let regen run
       this.mode = "winheal"
@@ -747,7 +651,7 @@ export class Bot {
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
       const tw = target.weapons ?? []
       // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
-      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], P.antiLight ? P.antiLightR : 55), Math.max(band[1], 100)]
+      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
       else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
       // can anything fire soon? (gun loaded, laser off cooldown, lightning in range with energy)
       const ready = slots.some((w) => {
@@ -762,17 +666,11 @@ export class Bot {
         this.mode = "push"
         band = tw.includes("lightning") && iLight < 0 ? [Math.max(band[0], 50), Math.max(band[1], 70)] : [Math.min(band[0], 15), Math.min(band[1], P.pushRange)]
       }
-      // recover in cover: hurt, and this bot isn't hitting us -> don't step out for a shot; hold fire so regen can run
-      // ...unless we'd clearly win this one: odds = (time until we die) / (time until it dies)
-      const recovering = P.recoverHp > 0 && !pushing && me.hp < me.max_hp * P.recoverHp && t - this.lastDmgT > P.recoverHitT && odds < P.recoverOdds
-      this.recovering = recovering
-      if (recovering) this.recoverSeenT = t
-      const readyR = (ready && !recovering) || punish
-      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, readyR || pushing)
+      move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, ready || pushing)
       if (P.posScore) {
         const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < (P.kite ? P.kiteMemT : 8) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
         if (P.threatPic) for (const s of this.soundContacts) if (t - s.t < 6) threats.push([s.pos[0], s.pos[1], s.pos[2] + 8])
-        const spot = this.fightSpot(pos, target, threats, band, readyR, obs)
+        const spot = this.fightSpot(pos, target, threats, band, ready, obs)
         if (spot && Math.hypot(spot[0] - pos[0], spot[1] - pos[1]) > P.spotArrive) {
           // head for the better spot, keeping a little sideways jink so we're not a straight-line target
           const f = this.followTo(spot, pos, t)
@@ -995,8 +893,6 @@ export class Bot {
     }
     this.faceThreats = []
     if (this.winHealing) { fire[0] = false; fire[1] = false }
-    if (this.recovering && this.mode !== "retreat") { fire[0] = false; fire[1] = false }
-    this.recovering = false
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
@@ -1029,7 +925,6 @@ export class Bot {
       if (P.passiveNear > 0) { const d = dist2(m.pos, obs.self.pos); if (!tr.approach || obs.t - tr.approach.t > 5) tr.approach = { t: obs.t, d0: d } }
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
-      if (tr.charging && !m.charging && (tr.weapons ?? []).includes("laser")) tr.laserFiredT = obs.t // its laser just went off: ~1.65 s cooldown
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
     }
     for (const [id, tr] of this.tracks) if (obs.t - tr.seenT > 30) this.tracks.delete(id)
@@ -1154,7 +1049,7 @@ export class Bot {
     const z = obs.zone, pos = obs.self.pos
     const c = z.next_center, R = z.next_radius
     // edge play: until the zone gets small, our resting spot is at the edge, not the interior
-    if (P.edgeMode && R > P.edgeHoldMinR) {
+    if (P.edgeMode && (!P.edgeFfaOnly || this.ffa) && R > P.edgeHoldMinR) {
       const g = this.edgeGoal(obs)
       return dist2(g, pos) > P.edgeArrive ? g : null
     }
@@ -1248,7 +1143,7 @@ export class Bot {
     }
     if (this.wantCubes(obs.self.cubes)) for (const c of this.cubeMem.values()) {
       const d = dist2(c, pos)
-      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
+      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
       let n = 0
       for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
       const s = n * P.grabCubeV - d
@@ -1259,7 +1154,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
+      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d)) continue
       const s = take.gain * P.grabWeaponV - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
@@ -1303,7 +1198,7 @@ export class Bot {
       let bc: V3 | null = null, bcs = -Infinity
       for (const c of this.cubeMem.values()) {
         const d = dist2(c, pos)
-        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
+        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c)) continue
         let n = 0
         for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
         const s = n * 40 - d * 0.5
@@ -1324,7 +1219,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > range || !this.inZoneSoon(obs, p.pos) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
+      if (d > range || !this.inZoneSoon(obs, p.pos)) continue
       let climb: V2 | undefined
       if (this.badLoot.has(id)) continue
       if (!this.reachable(p.pos)) {
@@ -1478,8 +1373,6 @@ export class Bot {
   /** Should we take a weapon of this kind? Returns preference gain and which slot to drop. */
   private takeDecision(kind: string, slots: (WeaponObs | null)[]): { gain: number; drop?: number } | null {
     if (kind === "gun" || slots.some((w) => w?.kind === kind)) return null
-    // game rule: a laser hit on a mech holding a mortar does +60% (laser.cookoff) -> never carry one
-    if (P.noMortar && kind === "mortar") return null
     const pref = P.weaponPref[kind] ?? 0
     const empty = slots.findIndex((w) => w === null)
     if (empty >= 0) return { gain: pref + 1 }
@@ -1668,15 +1561,6 @@ export class Bot {
     return out
   }
 
-  /** For TARGETING: never hit us and watched a while; only bots actually closing in stop being passive
-   *  (a farmer that merely wanders near us stays a non-target while hostiles are around). */
-  private isPassiveTarget(id: number): boolean {
-    const tr = this.tracks.get(id)
-    if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
-    if (tr.approach != null && tr.approach.t > this.nowT - 5 && tr.approach.d0 - dist2(tr.pos, this.myPos) > P.passiveClosing) return false
-    return true
-  }
-
   /** clearance needed to move: the starting radius check (2.6) grows with our size */
   private roomClear(): number { return P.sizeAware ? Math.max(2.6, this.myRad + 0.1) : 2.6 }
 
@@ -1800,8 +1684,6 @@ export class Bot {
           for (const th of threats) { if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue; cx += th[0]; cy += th[1]; n++ }
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
-        if (P.huntPath && this.huntCost) { const hn = this.nav.nodeAt(x, y); if (hn >= 0) s += P.huntSpotW * this.huntCost[hn] }
-        if (P.antiLight) for (const l of this.antiLights) if (Math.hypot(l[0] - x, l[1] - y) < P.antiLightR) { s += P.antiLightW; break }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
