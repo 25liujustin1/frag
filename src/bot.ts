@@ -54,6 +54,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private pincerUntil = -1
   private flankT = -99
   private flankAim = 0
   private flankUntil = -1
@@ -479,8 +480,18 @@ export class Bot {
     const pushing = !!target && target.kind === "mech" && P.push && otherShooters === 0 && me.hp > me.max_hp * P.pushMinSelfHp &&
       ((target.hp ?? 1e9) < (target.max_hp ?? 1400) * P.pushHpFrac || (target.hp ?? 1e9) < P.pushHp)
     if (pushing) this.retreating = false
-    if (this.retreating && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
+    // pincer: two hostile bots closing from directions far apart -> back away now (keep firing), whatever the odds
+    let pincer = false
+    if (P.pincerRetreat && !pushing) {
+      const att = [...this.tracks.values()].filter((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < 3 &&
+        dist2(tr.pos, pos) < P.pincerR && (tr.hitUsT > t - 6 || dist2(tr.pos, pos) < P.pincerNear))
+      for (let i = 0; i < att.length && !pincer; i++) for (let j = i + 1; j < att.length; j++)
+        if (angDiff(yawTo(pos, att[i].pos), yawTo(pos, att[j].pos)) > P.pincerAng) { pincer = true; break }
+      if (pincer) this.pincerUntil = t + P.pincerHold
+    }
+    if (this.retreating && t > this.pincerUntil && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
     if (!pushing && (lowHp || odds < retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
+    if (pincer) this.retreating = true
     // reset after a kill: heal up in cover before the next hunter arrives
     if (obs.events.some((e) => e.type === "kill")) {
       this.resetUntil = t + P.resetMax

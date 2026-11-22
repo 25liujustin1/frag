@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11f",
+  "name": "mr-v11g",
   "upgrades": [
     "armor",
     "plating",
@@ -276,5 +276,10 @@
   "flankEvery": 2,
   "flankDur": 0.5,
   "islandRetry": 3,
-  "islandMargin": 2
+  "islandMargin": 2,
+  "pincerRetreat": true,
+  "pincerR": 150,
+  "pincerNear": 90,
+  "pincerAng": 0.87,
+  "pincerHold": 4
 }
