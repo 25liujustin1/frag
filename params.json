@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11g",
+  "name": "mr-v11h",
   "upgrades": [
     "armor",
     "plating",
@@ -211,7 +211,7 @@
   "fleeQuiet": 6,
   "standoffT": 0,
   "standoffIgnore": 10,
-  "attackerFirst": false,
+  "attackerFirst": true,
   "attackerWindow": 5,
   "attackerPri": 4,
   "nonAttackerPen": 2,
@@ -281,5 +281,16 @@
   "pincerR": 150,
   "pincerNear": 90,
   "pincerAng": 0.87,
-  "pincerHold": 4
+  "pincerHold": 4,
+  "closeFirst": false,
+  "passiveNear": 80,
+  "closeR": 70,
+  "closePri": 3,
+  "threatFirst": true,
+  "threatDmgDiv": 200,
+  "threatDistDiv": 60,
+  "healWait": false,
+  "healBelow": 0.6,
+  "healUntil": 0.85,
+  "healSafeR": 130
 }

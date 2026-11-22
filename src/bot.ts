@@ -54,6 +54,11 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private healing = false
+  private healCover: V2 | null = null
+  private healCoverT = -99
+  private dmgLog: { by: number; amt: number; t: number }[] = []
+  private myPos: V3 = [0, 0, 0]
   private pincerUntil = -1
   private flankT = -99
   private flankAim = 0
@@ -212,6 +217,8 @@ export class Bot {
     const pos = me.pos as V3
     const act: Omit<Action, "tick"> = {}
 
+    this.myPos = obs.self.pos as V3
+    if (this.dmgLog.length > 200 || (this.dmgLog.length && this.dmgLog[0].t < obs.t - 10)) this.dmgLog = this.dmgLog.filter((h) => h.t > obs.t - 10)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -235,6 +242,7 @@ export class Bot {
         const tr = e.by != null ? this.tracks.get(e.by) : undefined
         if (tr) tr.hitUsT = t
         if (e.by != null) this.hitBy.set(e.by, t) // remember even if we haven't seen the shooter yet
+        if (e.by != null) this.dmgLog.push({ by: e.by, amt: e.amount, t })
         // flank alarm: shot by a bot we can't see right now -> look toward the shot (once per 2 s)
         if (P.flankLook && e.bearing != null && !obs.mechs.some((m) => m.id === e.by) && t - this.flankT > P.flankEvery && e.weapon !== "npc") {
           this.flankT = t; this.flankAim = e.bearing; this.flankUntil = t + P.flankDur
@@ -324,13 +332,23 @@ export class Bot {
       if (P.attackerFirst) {
         // whoever is shooting us comes first (weakest attacker first, via the hp term); passive bots wait
         const attacking = !!tr && tr.hitUsT > t - P.attackerWindow
-        if (attacking) s -= P.attackerPri
+        if (attacking) {
+          s -= P.attackerPri
+          // among attackers: whoever is hurting us most right now, and the closer one, before the merely weak one
+          if (P.threatFirst) {
+            let dmg = 0
+            for (const h of this.dmgLog) if (h.by === m.id && h.t > t - 5) dmg += h.amt
+            s -= dmg / P.threatDmgDiv
+            s += d / P.threatDistDiv
+          }
+        }
         else if (anyAttacker) s += P.nonAttackerPen
         if (m.id === this.curTarget && (attacking || !anyAttacker)) s -= P.targetStick
       } else {
         if (tr && tr.hitUsT > t - 3) s -= 1.5
         if (m.id === this.curTarget) s -= P.targetStick // finish what we started
       }
+      if (P.closeFirst && m.kind === "mech" && d < P.closeR) s -= P.closePri // deal with the close one first
       if (m.kind === "npc") s += 2
       if (P.counterW && m.kind === "mech") {
         // weapon triangle: laser > mortar > lightning > laser. Prefer targets we counter, avoid ones that counter us.
@@ -451,7 +469,14 @@ export class Bot {
     this.gunOnly = gunOnly
     this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
-    if (!target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
+    // heal window: hurt, nobody close, nothing hitting us -> stop dealing damage (it resets regen) and hide
+    const nearBot = [...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < 3 && dist2(tr.pos, pos) < P.healSafeR)
+    if (P.healWait) {
+      if (!this.healing && me.hp < me.max_hp * P.healBelow && !nearBot && t - this.lastDmgT > 2) this.healing = true
+      if (this.healing && (me.hp >= me.max_hp * P.healUntil || nearBot || t - this.lastDmgT < 0.5)) this.healing = false
+    }
+    const healMode = P.healWait && this.healing
+    if (!healMode && !target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
@@ -564,6 +589,16 @@ export class Bot {
         if (grab.drop != null) act.drop = grab.drop
       }
       boost = gd > 25 && me.energy > this.reserve + 20
+    } else if (healMode && !outside) {
+      this.mode = "heal"
+      const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 15).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+      let cover: V2 | null = this.healCover && t - this.healCoverT < 4 ? this.healCover : null
+      if (!cover && threats.length) { cover = this.findCover(pos, threats, obs); this.healCover = cover; this.healCoverT = t }
+      if (cover && dist2(cover, pos) > 3) move = this.followTo(cover, pos, t)
+      else {
+        const h = this.holdSpot(obs, pos)
+        move = h && Math.hypot(h.x - pos[0], h.y - pos[1]) > 3 ? this.followTo([h.x, h.y], pos, t) : [0, 0]
+      }
     } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
       // hide from every enemy seen recently, not just the ones in view this tick
@@ -799,6 +834,7 @@ export class Bot {
         this.stuckRefT = t
       }
     }
+    if (healMode) { fire[0] = false; fire[1] = false }
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
@@ -1401,7 +1437,10 @@ export class Bot {
   private isPassive(id: number): boolean {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
-    return !!tr && tr.hitUsT < 0 && tr.watchT >= P.passiveAfter
+    if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
+    // a bot that has walked up close is a threat, shots or not
+    if (P.closeFirst && dist2(tr.pos, this.myPos) < P.passiveNear) return false
+    return true
   }
 
   /** Highest solid or ground surface at (x, y). */
