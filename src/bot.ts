@@ -54,6 +54,9 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private flankT = -99
+  private flankAim = 0
+  private flankUntil = -1
   private islandCheckT = -99
   private offMain = false
   private islandGoal: V2 | null = null
@@ -225,6 +228,10 @@ export class Bot {
         const tr = e.by != null ? this.tracks.get(e.by) : undefined
         if (tr) tr.hitUsT = t
         if (e.by != null) this.hitBy.set(e.by, t) // remember even if we haven't seen the shooter yet
+        // flank alarm: shot by a bot we can't see right now -> look toward the shot (once per 2 s)
+        if (P.flankLook && e.bearing != null && !obs.mechs.some((m) => m.id === e.by) && t - this.flankT > P.flankEvery && e.weapon !== "npc") {
+          this.flankT = t; this.flankAim = e.bearing; this.flankUntil = t + P.flankDur
+        }
       } else if (e.type === "hit") {
         const tr = this.tracks.get(e.target)
         if (tr) tr.weHitT = t
@@ -776,6 +783,7 @@ export class Bot {
       }
       if (t < this.checkUntil) aim = [this.checkAim, 0]
     }
+    if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
     if (!Number.isFinite(aim[0]) || !Number.isFinite(aim[1])) aim = [me.aim[0], 0]
@@ -1109,7 +1117,7 @@ export class Bot {
         if (!b) continue
         climb = b
       }
-      const s = take.gain * 60 - d - (climb ? P.climbPenalty : 0)
+      const s = take.gain * 60 - d - (climb ? (p.kind === "laser" && !slots.some((w) => w?.kind === "laser") ? P.climbPenaltyLaser : P.climbPenalty) : 0)
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop, climb } }
     }
     if (this.wantCubes(obs.self.cubes)) for (const c of obs.cubes) {

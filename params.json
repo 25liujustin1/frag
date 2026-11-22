@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11d",
+  "name": "mr-v11e",
   "upgrades": [
     "armor",
     "plating",
@@ -270,5 +270,9 @@
   "lightAvoidW": 3,
   "islandEscape": true,
   "islandSearch": 60,
-  "muzzleFix": true
+  "muzzleFix": true,
+  "climbPenaltyLaser": 40,
+  "flankLook": true,
+  "flankEvery": 2,
+  "flankDur": 0.5
 }
