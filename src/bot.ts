@@ -54,6 +54,14 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private roofSpots: V3[] = []
+  private roofGoal: V3 | null = null
+  private roofBaseP: V2 | null = null
+  private roofHold = false
+  private roofT = 0
+  private roofPickT = -99
+  private roofBad = new Set<number>()
+  private antiLights: V3[] = []
   private climbStillT = -1
   private myPos: V3 = [0, 0, 0]
   private nowT = 0
@@ -137,6 +145,7 @@ export class Bot {
     this.nav = new Nav(this.r, { height: m.height, stepUp: m.step_up, minClear: m.radius + 0.5 })
     log(`map ${dir} loaded in ${(performance.now() - t0).toFixed(0)} ms`)
     if (P.routeExpW > 0) this.buildExposure()
+    if (P.roofCamp) this.findRoofs()
     this.warmup()
   }
 
@@ -223,6 +232,8 @@ export class Bot {
 
     if (this.recentHits.length && this.recentHits[0].t < obs.t - 5) this.recentHits = this.recentHits.filter((h) => h.t > obs.t - 5)
     this.myPos = obs.self.pos as V3; this.nowT = obs.t
+    this.antiLights = []
+    if (P.antiLight && !this.hasLight) for (const tr of this.tracks.values()) if (tr.id < 100 && obs.t - tr.seenT < P.antiLightMem && tr.weapons.includes("lightning")) this.antiLights.push(tr.pos)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -651,7 +662,7 @@ export class Bot {
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
       const tw = target.weapons ?? []
       // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
-      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
+      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], P.antiLight ? P.antiLightR : 55), Math.max(band[1], 100)]
       else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
       // can anything fire soon? (gun loaded, laser off cooldown, lightning in range with energy)
       const ready = slots.some((w) => {
@@ -841,7 +852,38 @@ export class Bot {
     // off the main walkable area (sunken bowl, rooftop pocket, ledge the route map doesn't connect):
     // pick the direction with the lowest wall to clear, recharge, jet straight up above it, then go over.
     // If we make no progress, mark that direction as tried and pick another.
-    if (P.islandEscape) {
+    if (P.roofCamp) {
+      const z = obs.zone
+      const roofOk = (q: V3) => dist2(z.next_center, q) < z.next_radius - P.roofZoneMargin && dist2(z.center, q) < z.radius - 10
+      if (this.roofHold && (!this.roofGoal || !roofOk(this.roofGoal) || pos[2] < this.roofGoal[2] - 3 || outside)) { this.roofHold = false; this.roofGoal = null }
+      if (!this.roofHold && !this.roofGoal && t > P.roofAfterT && !outside && !this.retreating && me.hp > me.max_hp * P.roofMinHp &&
+          !(target && target.kind === "mech" && tgtDist < 80) && t - this.roofPickT > 3) {
+        this.roofPickT = t
+        let best: V3 | null = null, bd = P.roofR
+        for (const q of this.roofSpots) {
+          const d = dist2(q, pos)
+          if (d < bd && roofOk(q) && !this.roofBad.has(q[0] * 7919 + q[1])) { const b = this.roofBase(q, me); if (b) { bd = d; best = q } }
+        }
+        if (best) { this.roofGoal = best; this.roofBaseP = this.roofBase(best, me); this.roofT = t }
+      }
+      if (this.roofGoal && !this.roofHold) {
+        if (t - this.roofT > P.roofClimbT || !this.roofBaseP) { this.roofBad.add(this.roofGoal[0] * 7919 + this.roofGoal[1]); this.roofGoal = null }
+        else if (pos[2] > this.roofGoal[2] - 1.5 && dist2(this.roofGoal, pos) < 10) this.roofHold = true
+        else {
+          this.mode = "roofclimb"
+          const c = this.climbTo(this.roofGoal, this.roofBaseP, me, pos, t)
+          move = c.move; boost = c.boost; jump = c.jump
+          this.stuckRefT = t
+        }
+      }
+      if (this.roofHold && this.roofGoal) {
+        this.mode = "roof"
+        move = dist2(this.roofGoal, pos) > 3 ? dirTo(pos, this.roofGoal) : [0, 0]
+        boost = false; jump = false
+        this.stuckRefT = t
+      }
+    }
+    if (P.islandEscape && !this.roofHold && !this.roofGoal) {
       const nav = this.nav
       if (t - this.islandCheckT > 0.5) {
         this.islandCheckT = t
@@ -901,7 +943,7 @@ export class Bot {
     if (len > 1) move = [move[0] / len, move[1] / len]
     act.move = [round3(move[0]), round3(move[1])]
     if (P.airBoostGate && !me.grounded) {
-      const meant = this.mode === "climb" || this.mode === "scout" || this.mode === "island" || (t < this.jumpUntil && pos[2] - this.jumpZ < P.unstuckJetH)
+      const meant = this.mode === "climb" || this.mode === "scout" || this.mode === "island" || this.mode === "roofclimb" || (t < this.jumpUntil && pos[2] - this.jumpZ < P.unstuckJetH)
       if (!meant) boost = false
     }
     act.boost = boost
@@ -1143,7 +1185,7 @@ export class Bot {
     }
     if (this.wantCubes(obs.self.cubes)) for (const c of this.cubeMem.values()) {
       const d = dist2(c, pos)
-      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
+      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
       let n = 0
       for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
       const s = n * P.grabCubeV - d
@@ -1154,7 +1196,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d)) continue
+      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       const s = take.gain * P.grabWeaponV - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
@@ -1198,7 +1240,7 @@ export class Bot {
       let bc: V3 | null = null, bcs = -Infinity
       for (const c of this.cubeMem.values()) {
         const d = dist2(c, pos)
-        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c)) continue
+        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
         let n = 0
         for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
         const s = n * 40 - d * 0.5
@@ -1219,7 +1261,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > range || !this.inZoneSoon(obs, p.pos)) continue
+      if (d > range || !this.inZoneSoon(obs, p.pos) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       let climb: V2 | undefined
       if (this.badLoot.has(id)) continue
       if (!this.reachable(p.pos)) {
@@ -1507,6 +1549,19 @@ export class Bot {
   }
 
   /** Highest solid or ground surface at (x, y). */
+  /** Flat rooftops (roofMinH..roofMaxH above the ground, level within 0.6 m over a 4 m radius). */
+  private findRoofs(): void {
+    const r = this.r, out: V3[] = []
+    for (let y = r.minY + 6; y < r.minY + r.ny - 6; y += 4) for (let x = r.minX + 6; x < r.minX + r.nx - 6; x += 4) {
+      const top = this.topAt(x, y), h = top - r.groundAt(x, y)
+      if (h < P.roofMinH || h > P.roofMaxH) continue
+      let flat = true
+      for (let k = 0; k < 8 && flat; k++) { const a = (k * Math.PI) / 4; if (Math.abs(this.topAt(x + Math.cos(a) * 4, y + Math.sin(a) * 4) - top) > 0.6) flat = false }
+      if (flat) out.push([x, y, top])
+    }
+    this.roofSpots = out
+  }
+
   private topAt(x: number, y: number): number {
     const r = this.r, c = r.cellOf(x, y)
     if (c < 0) return 1e9
@@ -1684,6 +1739,7 @@ export class Bot {
           for (const th of threats) { if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue; cx += th[0]; cy += th[1]; n++ }
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
+        if (P.antiLight) for (const l of this.antiLights) if (Math.hypot(l[0] - x, l[1] - y) < P.antiLightR) { s += P.antiLightW; break }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target

@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11p-ffaedge",
+  "name": "mr-v11x",
   "upgrades": [
     "armor",
     "plating",
@@ -299,5 +299,17 @@
   "wedgeClear": 1,
   "passiveNear": 80,
   "passiveClosing": 30,
-  "climbStall": 3
+  "climbStall": 3,
+  "antiLight": true,
+  "antiLightR": 59,
+  "antiLightW": 6,
+  "antiLightMem": 6,
+  "roofCamp": false,
+  "roofMinH": 6,
+  "roofMaxH": 30,
+  "roofR": 70,
+  "roofAfterT": 30,
+  "roofMinHp": 0.5,
+  "roofZoneMargin": 30,
+  "roofClimbT": 15
 }
