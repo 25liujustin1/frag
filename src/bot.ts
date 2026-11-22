@@ -153,6 +153,9 @@ export class Bot {
       // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
       // (very close mechs), or fight it out in the endgame.
       pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
+    } else if (P.survivor && !this.ffa && !fighting.length) {
+      // survivor (practice experiment): never start a fight; only fight back, or finish a badly hurt mech
+      pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.survWeakFrac || dist2(m.pos, pos) < P.survCloseRange)
     }
     for (const m of pool) {
       const d = dist2(m.pos, pos)
@@ -307,7 +310,7 @@ export class Bot {
     // escape: low HP + any recent threat → get out of sight and stay out until healed. Nothing else.
     const recentTracks = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < P.escapeMemory)
     const threatRecent = enemies.length > 0 || underFire || recentTracks.length > 0
-    if (!this.escaping && me.hp < me.max_hp * (this.ffa ? P.ffaEscapeHp : P.escapeHpFrac) && threatRecent) this.escaping = true
+    if (!this.escaping && me.hp < me.max_hp * (this.ffa ? P.ffaEscapeHp : P.survivor ? P.survEscapeHp : P.escapeHpFrac) && threatRecent) this.escaping = true
     if (this.escaping && me.hp >= me.max_hp * P.escapeExitFrac) this.escaping = false
     const zoneSlack = zoneGoal ? this.zoneSlack(obs, zoneGoal) : Infinity
     const grab = P.grab && !outside && !this.escaping && t - this.lastDmgT > P.grabQuiet && me.hp > me.max_hp * P.grabMinHp ? this.grabGoal(obs, slots, pos, enemies) : null
@@ -583,7 +586,8 @@ export class Bot {
   private zoneGoal(obs: Observation): V2 | null {
     const z = obs.zone, pos = obs.self.pos
     const c = z.next_center, R = z.next_radius
-    const inner = Math.max(R * P.zoneInnerFrac, Math.min(R, 6))
+    // final phases: stand at the exact centre (the last mech inside the closing circle outlives the rest)
+    const inner = R <= P.finalCenterR ? 1.5 : Math.max(R * P.zoneInnerFrac, Math.min(R, 6))
     const d = dist2(c, pos)
     if (d <= inner) return null
     const k = inner / d
