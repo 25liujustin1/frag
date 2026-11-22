@@ -54,6 +54,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private fleeReplanT = -99
   private gunOnly = true
   private hitBy = new Map<number, number>()
   private targetSinceT = 0
@@ -467,6 +468,12 @@ export class Bot {
     }
     if (this.fleeing && (me.hp >= me.max_hp * P.fleeExitHp || t - this.fleeT > P.fleeMaxT)) { this.fleeing = false; this.fleeDest = null }
     if (this.fleeing && this.fleeDest && t - this.fleeT > 8 && t - this.lastHostileT < 2) { this.fleeDest = this.fleeDestination(obs, pos, hostiles); this.fleeT = t - 0.01 }
+    // re-pick the escape point often, and avoid every known bot (passive ones too) while fleeing
+    if (P.fleeAll && this.fleeing && t - this.fleeReplanT > P.fleeReplan) {
+      this.fleeReplanT = t
+      const all = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 10)
+      this.fleeDest = this.fleeDestination(obs, pos, all) ?? this.fleeDest
+    }
     const flee = this.fleeing
     const grab = P.grab && !outside && !this.escaping && t - this.lastDmgT > P.grabQuiet && me.hp > me.max_hp * P.grabMinHp ? this.grabGoal(obs, slots, pos, enemies) : null
     if (zoneGoal && ((outside && P.zoneOutsideFirst) || zoneSlack < P.zoneSlack)) {

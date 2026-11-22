@@ -1,5 +1,5 @@
 {
-  "name": "mr-v10b",
+  "name": "mr-v10c",
   "upgrades": [
     "armor",
     "plating",
@@ -204,7 +204,7 @@
   "checkSix": false,
   "checkEvery": 2.5,
   "checkDur": 0.5,
-  "fleeTail": true,
+  "fleeTail": false,
   "fleeHp": 0.35,
   "fleeExitHp": 0.7,
   "fleeMaxT": 40,
@@ -255,5 +255,7 @@
     "weapons.reload": 0.2,
     "weapons.pierce": 0.05,
     "default": 0.05
-  }
+  },
+  "fleeAll": false,
+  "fleeReplan": 2
 }
