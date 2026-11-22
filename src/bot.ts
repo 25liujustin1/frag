@@ -54,6 +54,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private retreatDir: V2 | null = null
+  private retreatDirT = -99
   private huntCost: Float32Array | null = null
   private huntNodes: number[] = []
   private recoverSeenT = -99
@@ -355,6 +357,14 @@ export class Bot {
     const fighting = enemies.filter((m) => engaged(m.id) && dist2(m.pos, pos) < P.engageRange)
     let pool = fighting.length ? [...fighting, ...npcsAttacking] : [...enemies, ...npcsAttacking]
     if (hostileNear) pool = pool.filter((m) => m.kind === "npc" || !(P.passiveSplit ? this.isPassiveTarget(m.id) : this.isPassive(m.id)))
+    // don't wake idle bots: only shoot bots that are hunting us (shot us, closing in, or already in a fight with us)
+    if (P.noWake) pool = pool.filter((m) => {
+      if (m.kind === "npc") return true
+      const tr = this.tracks.get(m.id)
+      if (!tr) return false
+      if (tr.hitUsT >= 0 || engaged(m.id)) return true
+      return tr.approach != null && tr.approach.t > t - 5 && tr.approach.d0 - dist2(m.pos, pos) > P.passiveClosing
+    })
     // standoff: a target we've held for a while without firing a shot is dropped for a bit (unless it's shooting us)
     if (P.standoffT > 0) pool = pool.filter((m) => !((this.ignoreUntil.get(m.id) ?? -1) > t) || (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 3)
     if (this.ffa && !fighting.length) {
@@ -478,7 +488,17 @@ export class Bot {
           if (tgtLos) this.laserLostT = -1
           else if (this.laserLostT < 0) this.laserLostT = t
           const lostLong = this.laserLostT >= 0 && t - this.laserLostT > 1.2 && !this.ambushing
-          if (full && tgtLos && aimErr(hitscanAim) < tol) fire[iLaser] = false // release → fires
+          // partial lethal shot: if the charge so far already kills the target, release now
+          let lethalNow = false
+          if (P.laserLethal && tgtLos && target.kind === "mech") {
+            const st = laser.stats as any, ch = laser.charge ?? 0, minC = st.min_charge ?? 0.15, minF = st.min_frac ?? 0.35
+            if (ch >= minC) {
+              const frac = minF + (1 - minF) * clamp((ch - minC) / Math.max(1e-3, st.charge - minC), 0, 1)
+              const dmg = st.damage * frac * (1 + 0.04 * Math.min(me.cubes, 10))
+              lethalNow = (target.hp ?? 1e9) <= dmg * P.laserLethalMargin
+            }
+          }
+          if ((full || lethalNow) && tgtLos && aimErr(hitscanAim) < tol) fire[iLaser] = false // release → fires
           else if (lostLong || autoFireSoon) fire[iLaser] = false
           else fire[iLaser] = true
         } else if (laser.cooldown <= 0.05 && ((tgtLos && tgtDist < laser.stats.range * 0.97) || (this.ambushing && (tgtDist < P.prechargeDist || closing * 0.9 > tgtDist - P.prechargeDist)))) {
@@ -672,6 +692,22 @@ export class Bot {
           }
           boost = me.energy > (iLight >= 0 ? 25 : 8)
           this.faceThreats = tp
+        }
+      }
+      // commit to an escape direction: don't flip-flop between two covers on opposite sides
+      if (P.retreatHold > 0) {
+        const ml = Math.hypot(move[0], move[1])
+        if (ml > 0.2) {
+          const nd: V2 = [move[0] / ml, move[1] / ml]
+          const old = this.retreatDir
+          if (old && t - this.retreatDirT < P.retreatHold && nd[0] * old[0] + nd[1] * old[1] < -0.2) {
+            // keep the old heading unless it's blocked or runs into a bot
+            const ahead: V2 = [pos[0] + old[0] * 12, pos[1] + old[1] * 12]
+            const blocked = !this.lineClear(pos[0], pos[1], ahead[0], ahead[1])
+            const intoBot = enemies.some((e) => dist2(e.pos, pos) < 60 && (e.pos[0] - pos[0]) * old[0] + (e.pos[1] - pos[1]) * old[1] > 0.7 * dist2(e.pos, pos))
+            if (!blocked && !intoBot) move = [old[0] * ml, old[1] * ml]
+            else { this.retreatDir = nd; this.retreatDirT = t }
+          } else if (!old || t - this.retreatDirT >= P.retreatHold || nd[0] * old[0] + nd[1] * old[1] >= -0.2) { this.retreatDir = nd; this.retreatDirT = t }
         }
       }
     } else if (this.winHealing && !outside) {
