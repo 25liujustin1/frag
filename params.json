@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11",
+  "name": "mr-v11b",
   "upgrades": [
     "armor",
     "plating",
@@ -258,11 +258,16 @@
   },
   "fleeAll": false,
   "fleeReplan": 2,
-  "edgeMode": true,
+  "edgeMode": false,
   "edgeFrac": 0.9,
   "edgeMapMargin": 25,
   "edgeArrive": 20,
   "edgeMaxT": 100,
   "edgeHoldMinR": 140,
-  "edgeLootR": 60
+  "edgeLootR": 60,
+  "lightAvoid": false,
+  "lightAvoidR": 55,
+  "lightAvoidW": 3,
+  "islandEscape": true,
+  "islandSearch": 60
 }

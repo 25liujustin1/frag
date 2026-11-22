@@ -54,6 +54,10 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private islandCheckT = -99
+  private offMain = false
+  private islandGoal: V2 | null = null
+  private hasLight = false
   private fleeReplanT = -99
   private gunOnly = true
   private hitBy = new Map<number, number>()
@@ -136,14 +140,21 @@ export class Bot {
   }
 
   /** Dynamic route cost: ground that any recently seen enemy can see (within 160 m of us), refreshed each second. */
+  /** Bots seen with lightning in the last 10 s (only matters when we don't have lightning ourselves). */
+  private lightCarriers(t: number): V3[] {
+    if (!P.lightAvoid || this.hasLight) return []
+    return [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 10 && tr.weapons.includes("lightning")).map((tr) => tr.pos)
+  }
+
   private updateThreatCost(obs: Observation): void {
     const nav = this.nav
-    if ((P.routeThreatW <= 0 && P.routeNearW <= 0) || obs.t - this.threatCostT < 1) return
+    if ((P.routeThreatW <= 0 && P.routeNearW <= 0 && !P.lightAvoid) || obs.t - this.threatCostT < 1) return
     this.threatCostT = obs.t
     for (const n of this.threatNodes) nav.threatCost[n] = 0
     this.threatNodes = []
     const eyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 10 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8])
-    if (!eyes.length) return
+    const lights = this.lightCarriers(obs.t)
+    if (!eyes.length && !lights.length) return
     const pos = obs.self.pos, r = this.r
     for (let dy = -160; dy <= 160; dy += 8) for (let dx = -160; dx <= 160; dx += 8) {
       if (dx * dx + dy * dy > 160 * 160) continue
@@ -157,7 +168,8 @@ export class Bot {
         if (!seen && de < 230 && r.los(e[0], e[1], e[2], x, y, z, 1)) seen = true
       }
       // cost: in an enemy's sight line, plus closeness to any known enemy (keep routes away from bots)
-      const cost = (seen ? P.routeThreatW : 0) + (nearest < P.routeNearR ? (P.routeNearW * (P.routeNearR - nearest)) / P.routeNearR : 0)
+      let cost = (seen ? P.routeThreatW : 0) + (nearest < P.routeNearR ? (P.routeNearW * (P.routeNearR - nearest)) / P.routeNearR : 0)
+      for (const l of lights) if (Math.hypot(l[0] - x, l[1] - y) < P.lightAvoidR) { cost += P.lightAvoidW; break }
       if (cost <= 0) continue
       const I0 = n0 % nav.nx, J0 = (n0 - I0) / nav.nx
       for (let j = -2; j < 2; j++) for (let i = -2; i < 2; i++) {
@@ -416,6 +428,7 @@ export class Bot {
     let crateGoal: V3 | null = null
     const gunOnly = slots.every((w) => !w || w.kind === "gun")
     this.gunOnly = gunOnly
+    this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
     if (!target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
@@ -720,6 +733,28 @@ export class Bot {
     }
 
     if (t < this.unstickUntil) move = this.unstickDir
+    // off the main walkable area (spawned in the sunken bowl or on a ledge the route map doesn't connect):
+    // head straight for the nearest main-area spot, jumping and jetting over whatever is in the way
+    if (P.islandEscape) {
+      if (t - this.islandCheckT > 0.5) {
+        this.islandCheckT = t
+        const nav = this.nav, need = nav.dynClear
+        nav.dynClear = 0
+        this.offMain = me.grounded && nav.nearestWalkable(pos[0], pos[1], 2) < 0
+        if (this.offMain) {
+          const n = nav.nearestWalkable(pos[0], pos[1], P.islandSearch)
+          this.islandGoal = n >= 0 ? [nav.nodeX(n), nav.nodeY(n)] : null
+        }
+        nav.dynClear = need
+      }
+      if (this.islandGoal && (this.offMain || (!me.grounded && this.mode === "island"))) {
+        this.mode = "island"
+        move = dirTo(pos, this.islandGoal)
+        jump = me.grounded
+        boost = !me.grounded && me.energy > 3
+        this.stuckRefT = t
+      }
+    }
     // check six: while moving/retreating and not shooting, glance at the most likely unseen danger
     if (P.checkSix && !fire[0] && !fire[1] && t - this.lastDmgT > 1 && ["retreat", "rotate", "grab", "collect", "reposition", "seek", "loot"].includes(this.mode)) {
       if (t >= this.checkNextT) {
@@ -741,7 +776,7 @@ export class Bot {
     if (len > 1) move = [move[0] / len, move[1] / len]
     act.move = [round3(move[0]), round3(move[1])]
     if (P.airBoostGate && !me.grounded) {
-      const meant = this.mode === "climb" || this.mode === "scout" || (t < this.jumpUntil && pos[2] - this.jumpZ < P.unstuckJetH)
+      const meant = this.mode === "climb" || this.mode === "scout" || this.mode === "island" || (t < this.jumpUntil && pos[2] - this.jumpZ < P.unstuckJetH)
       if (!meant) boost = false
     }
     act.boost = boost
@@ -1505,6 +1540,7 @@ export class Bot {
         const n = this.nav.nodeAt(x, y)
         if (n < 0 || !this.nav.walk[n]) continue
         if (dist2(z.center, [x, y]) > z.radius - 5) continue
+        if (this.lightCarriers(obs.t).some((l) => Math.hypot(l[0] - x, l[1] - y) < P.lightAvoidR)) continue
         const gz = this.r.groundAt(x, y)
         let hidden = true
         for (const th of threats) if (this.r.los(th[0], th[1], th[2], x, y, gz + 4.5) || this.r.los(th[0], th[1], th[2], x, y, gz + 8.5)) { hidden = false; break }
