@@ -402,15 +402,22 @@ export class Bot {
 
       // choose primary aim
       let mortarSol: { yaw: number; pitch: number } | null = null
-      if (mortar && mortar.cooldown <= 0.15 && tgtDist > 28 && (!tgtLos || tgtDist > 70)) {
+      const gunG = iGun >= 0 ? slots[iGun]! : null
+      const gunReloading = !!gunG && ((gunG.ammo ?? 0) === 0 || (gunG.reload ?? 0) > 0)
+      const mortarFill = P.mortarReload && gunReloading // gun is reloading: lob mortar shells meanwhile
+      if (mortar && mortar.cooldown <= 0.15 && tgtDist > (mortarFill ? 20 : 28) && (!tgtLos || tgtDist > 70 || mortarFill)) {
         const ms = mortar.stats
-        const mm: V3 = [pos[0], pos[1], pos[2] + me.stats.height + 0.5]
+        let mm: V3 = [pos[0], pos[1], pos[2] + me.stats.height + 0.5]
+        if (P.muzzleFix) {
+          const sz = 1 + ((this.hello.config as any).cubes?.size_per_cube ?? 0.05) * me.cubes, fwd = ((this.hello.config.mech as any).radius ?? 2.5) * sz + 0.4
+          mm = [pos[0] + Math.cos(me.aim[0]) * fwd, pos[1] + Math.sin(me.aim[0]) * fwd, pos[2] + ((this.hello.config.mech as any).height ?? 9) * sz + 0.5]
+        }
         mortarSol = mortarSolve(this.r, mm, [target.pos[0], target.pos[1], target.pos[2]], tv, ms.speed, ms.gravity, false, me.stats.min_pitch, me.stats.max_pitch)
           ?? mortarSolve(this.r, mm, [target.pos[0], target.pos[1], target.pos[2]], tv, ms.speed, ms.gravity, true, me.stats.min_pitch, me.stats.max_pitch)
       }
       if (laser && (laserCharging || (laser.cooldown <= 0.1 && tgtLos && tgtDist < laser.stats.range))) aim = hitscanAim
       else if (light && tgtDist < light.stats.range + 5 && tgtLos) aim = hitscanAim
-      else if (mortarSol && !(tgtLos && tgtDist < 120 && iGun >= 0 && (slots[iGun]!.ammo ?? 0) > 0)) aim = [mortarSol.yaw, mortarSol.pitch]
+      else if (mortarSol && (mortarFill || !(tgtLos && tgtDist < 120 && iGun >= 0 && (slots[iGun]!.ammo ?? 0) > 0))) aim = [mortarSol.yaw, mortarSol.pitch]
       else aim = gunAim ?? hitscanAim
 
       // ambush / surprise: is the target unaware of us (not fighting us, facing away)? Is it coming

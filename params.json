@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11i",
+  "name": "mr-v11j",
   "upgrades": [
     "armor",
     "plating",
@@ -211,7 +211,7 @@
   "fleeQuiet": 6,
   "standoffT": 0,
   "standoffIgnore": 10,
-  "attackerFirst": true,
+  "attackerFirst": false,
   "attackerWindow": 5,
   "attackerPri": 4,
   "nonAttackerPen": 2,
@@ -258,7 +258,7 @@
   },
   "fleeAll": false,
   "fleeReplan": 2,
-  "edgeMode": true,
+  "edgeMode": false,
   "edgeFrac": 0.9,
   "edgeMapMargin": 25,
   "edgeArrive": 20,
@@ -286,7 +286,7 @@
   "passiveNear": 80,
   "closeR": 70,
   "closePri": 3,
-  "threatFirst": true,
+  "threatFirst": false,
   "threatDmgDiv": 200,
   "threatDistDiv": 60,
   "healWait": false,
@@ -295,5 +295,6 @@
   "healSafeR": 130,
   "vultureW": 0,
   "vultureWin": 4,
-  "vultureFfa": false
+  "vultureFfa": false,
+  "mortarReload": true
 }
