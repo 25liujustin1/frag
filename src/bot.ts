@@ -88,8 +88,6 @@ export class Bot {
   private zoneEdgeDist = 999
   private edgeBounds = { minX: -500, maxX: 500, minY: -300, maxY: 300 }
   private edgeDone = false
-  // hit-and-run cycle: approach -> attack -> disengage -> recover -> reposition -> approach
-  private hr = { st: "idle", tid: -1, t0: 0, dmg: 0, bear: 0, tPos: [0, 0, 0] as V3, tVel: [0, 0, 0] as V3, tSeen: -99, spot: null as V2 | null, charged: false }
   private campAnchor: V2 | null = null
   private campT = 0
   ffa = false
@@ -320,11 +318,6 @@ export class Bot {
         if (m.id === this.curTarget) s -= P.targetStick // finish what we started
       }
       if (m.kind === "npc") s += 2
-      if (P.harass && m.kind === "mech" && (!P.edgeMode || this.edgeDone)) {
-        const lone = !enemies.some((o) => o.id !== m.id && !this.isPassive(o.id) && dist2(o.pos, m.pos) < P.hrIsoR)
-        if (lone) s -= P.hrIsoW
-        s -= P.hrWeakW * (1 - (m.hp ?? 1400) / Math.max(1, m.max_hp ?? 1400))
-      }
       if (P.counterW && m.kind === "mech") {
         // weapon triangle: laser > mortar > lightning > laser. Prefer targets we counter, avoid ones that counter us.
         const mine = slots.filter(Boolean).map((w) => w!.kind), theirs = m.weapons ?? []
@@ -340,10 +333,6 @@ export class Bot {
     const tgtCenter: V3 | null = target ? [target.pos[0], target.pos[1], target.pos[2] + centerZ(target)] : null
     const tgtLos = !!tgtCenter && this.r.los(muzzle[0], muzzle[1], muzzle[2], tgtCenter[0], tgtCenter[1], tgtCenter[2])
     const underFire = t - this.lastDmgT < 3
-    const hrOn = !!P.harass && (!P.edgeMode || this.edgeDone)
-    if (hrOn) this.updateHarass(obs, target, pos, t)
-    else this.hr.st = "idle"
-    const hrHide = hrOn && (this.hr.st === "disengage" || this.hr.st === "recover" || this.hr.st === "reposition")
 
     // ---- aim + fire
     const fire: [boolean, boolean] = [false, false]
@@ -551,8 +540,6 @@ export class Bot {
         if (grab.drop != null) act.drop = grab.drop
       }
       boost = gd > 25 && me.energy > this.reserve + 20
-    } else if (hrHide && !outside) {
-      this.harassMove(obs, pos, t, me, (m: V2, b: boolean) => { move = m; boost = b })
     } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
       // hide from every enemy seen recently, not just the ones in view this tick
@@ -686,7 +673,6 @@ export class Bot {
         move = [move[0] * 0.6 + Math.cos(perp) * j * 0.8, move[1] * 0.6 + Math.sin(perp) * j * 0.8]
       }
     }
-    if (hrHide && !(underFire && target && tgtDist < P.hrDefendR)) { fire[0] = false; fire[1] = false }
     if (fire[0] || fire[1]) this.lastShotT = t
     if (P.standoffT > 0 && target && target.kind === "mech" && t - this.targetSinceT > P.standoffT && t - this.lastShotT > P.standoffT) {
       this.ignoreUntil.set(target.id, t + P.standoffIgnore); this.targetSinceT = t
@@ -922,94 +908,6 @@ export class Bot {
   }
 
   /** A point inside the circle the zone is shrinking to; null if we are already well inside. */
-  /** Hit-and-run state machine (see P.harass). */
-  private updateHarass(obs: Observation, target: ActorObs | null, pos: V3, t: number): void {
-    const h = this.hr, me = obs.self
-    const go = (st: string) => { h.st = st; h.t0 = t }
-    if (h.tid >= 0) {
-      const seen = obs.mechs.find((m) => m.id === h.tid)
-      if (seen) { h.tPos = seen.pos as V3; h.tVel = seen.vel as V3; h.tSeen = t }
-      for (const e of obs.events) if (e.type === "hit" && e.target === h.tid) h.dmg += e.amount
-      if (obs.events.some((e) => e.type === "kill" && e.target === h.tid)) { h.st = "idle"; h.tid = -1 }
-    }
-    const laser = me.weapons.find((w) => w?.kind === "laser")
-    const charging = !!laser && (laser.charge ?? 0) > 0
-    const laserFired = h.charged && !charging
-    h.charged = charging
-    if (h.st === "idle") {
-      if (target && target.kind === "mech" && dist2(target.pos, pos) < P.engageRange) {
-        h.tid = target.id; h.dmg = 0; h.tPos = target.pos as V3; h.tVel = target.vel as V3; h.tSeen = t; go("approach")
-      }
-      return
-    }
-    if (h.st === "approach") {
-      if (target && target.id !== h.tid && target.kind === "mech") { h.tid = target.id; h.dmg = 0; h.t0 = t }
-      if (h.dmg > 0 || laserFired) go("attack")
-      else if (t - h.t0 > P.hrApproachMax || t - h.tSeen > P.hrForget) { h.st = "idle"; h.tid = -1 }
-      return
-    }
-    if (h.st === "attack") {
-      if (h.dmg >= P.hrBurst || laserFired || t - h.t0 > P.hrAttackMax) { h.bear = yawTo(h.tPos, pos); h.spot = null; go("disengage") }
-      return
-    }
-    if (h.st === "disengage") {
-      const seen = this.hrThreats(obs, t).some((th) => this.r.los(th[0], th[1], th[2], pos[0], pos[1], pos[2] + 4.5))
-      if ((!seen && t - h.t0 > P.hrDisMin) || t - h.t0 > P.hrDisMax) go("recover")
-      return
-    }
-    if (h.st === "recover") {
-      if (me.hp >= me.max_hp * P.hrRecoverHp || t - h.t0 > P.hrRecoverMax) { h.spot = this.hrSpot(obs, pos); h.dmg = 0; go(h.spot ? "reposition" : "approach") }
-      return
-    }
-    if (h.st === "reposition") {
-      if (!h.spot || dist2(h.spot, pos) < P.hrArrive || t - h.t0 > P.hrRepoMax) go("approach")
-    }
-  }
-
-  private hrThreats(obs: Observation, t: number): V3[] {
-    const th = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
-    if (this.hr.tid >= 0 && t - this.hr.tSeen < P.hrForget) th.push([this.hr.tPos[0], this.hr.tPos[1], this.hr.tPos[2] + 8])
-    return th
-  }
-
-  /** Where to come back from: band distance from where the target is heading, at a new angle. */
-  private hrSpot(obs: Observation, pos: V3): V2 | null {
-    const h = this.hr, t = obs.t
-    const ahead = Math.min(P.hrLead, Math.max(0, t - h.tSeen) + 4)
-    const tp: V2 = [h.tPos[0] + h.tVel[0] * ahead, h.tPos[1] + h.tVel[1] * ahead]
-    const band = P.bands[this.bestWeapon(obs.self.weapons)] ?? P.bands.gun
-    const R = (band[0] + band[1]) / 2
-    const others = this.hrThreats(obs, t).filter((th) => Math.hypot(th[0] - h.tPos[0], th[1] - h.tPos[1]) > 5)
-    let best: V2 | null = null, bc = Infinity
-    for (const deg of [70, -70, 110, -110, 45, -45, 150, -150]) {
-      const a = h.bear + (deg * Math.PI) / 180
-      const x = tp[0] + Math.cos(a) * R, y = tp[1] + Math.sin(a) * R
-      const gz = this.r.groundAt(x, y)
-      if (!this.reachable([x, y, gz]) || !this.inZoneSoon(obs, [x, y, gz])) continue
-      let c = Math.hypot(x - pos[0], y - pos[1]) * 0.02 + Math.abs(deg) * 0.002
-      for (const o of others) if (this.r.los(o[0], o[1], o[2], x, y, gz + 4.5)) c += 3
-      if (c < bc) { bc = c; best = [x, y] }
-    }
-    return best
-  }
-
-  private harassMove(obs: Observation, pos: V3, t: number, me: Observation["self"], set: (m: V2, b: boolean) => void): void {
-    const h = this.hr
-    const threats = this.hrThreats(obs, t)
-    if (h.st === "reposition" && h.spot) {
-      this.mode = "hr-reposition"
-      set(this.followTo(h.spot, pos, t), false) // walk: quieter than boosting
-      return
-    }
-    const seen = threats.some((th) => this.r.los(th[0], th[1], th[2], pos[0], pos[1], pos[2] + 4.5) || this.r.los(th[0], th[1], th[2], pos[0], pos[1], pos[2] + 8.5))
-    this.mode = h.st === "disengage" ? "hr-disengage" : "hr-recover"
-    if (threats.length && (seen || h.st === "disengage")) {
-      const cover = this.findCover(pos, threats, obs)
-      if (cover) set(this.followTo(cover, pos, t), h.st === "disengage" && me.energy > 10)
-      else set(this.combatDir(pos, threats[0], 9999, 9999, obs, false), me.energy > 10)
-    } else set([0, 0], false) // hidden: stand still, regen
-  }
-
   /** Edge play: a spot on our side near the map edge, kept inside the next safe circle. */
   private edgeGoal(obs: Observation): V2 {
     const z = obs.zone, pos = obs.self.pos
