@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; threatT?: number; approach?: { t: number; d0: number } }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number } }
 
 export class Bot {
   name: string = P.name
@@ -107,7 +107,8 @@ export class Bot {
   private zoneEdgeDist = 999
   private edgeBounds = { minX: -500, maxX: 500, minY: -300, maxY: 300 }
   private edgeDone = false
-  private ffaByClock = false
+  private xFleeUntil = -1
+  private xFleeFrom: number[] | null = null
   private campAnchor: V2 | null = null
   private campT = 0
   ffa = false
@@ -128,8 +129,6 @@ export class Bot {
 
   constructor(hello: Hello) {
     this.hello = hello
-    // clock switch (from v11w): after the practice cutoff every match is a free-for-all, so act like one from the first second
-    if (P.ffaClock) { const now = Date.now() / 1000; if (now >= P.ffaClockT && now < P.ffaClockT + 5 * 86400) { this.ffa = true; this.ffaByClock = true } }
     this.rng = new Rng(hello.seed)
     let dir = hello.map?.dir
     if (!dir || !existsSync(dir + "/v2/world.json")) dir = ROOT + "arena"
@@ -268,8 +267,6 @@ export class Bot {
     // survivor mode: always (P.survivor), or switch to it late (time) or after enough kills (hybrid)
     this.survNow = !!P.survivor || t >= P.survAfterT || this.myKills >= P.survAfterKills
     if (!this.ffa && P.ffaDetect && t < P.ffaDetectT && obs.alive + this.myKills <= (this.hello.config.match.mechs ?? 16) - P.ffaDeaths) { this.ffa = true; this.ffaT = t }
-    // clock-set free-for-all, but by 1:00 nobody has died except bots we killed -> it is practice after all
-    if (this.ffaByClock && t >= 60 && obs.alive + this.myKills >= (this.hello.config.match.mechs ?? 16)) { this.ffa = false; this.ffaByClock = false }
     // sounds that suggest an approaching or firing mech (most recent, nearest band first)
     for (const s of obs.sounds) {
       if (!SOUND_THREAT.has(s.kind) || s.dist === "far") continue
@@ -316,7 +313,7 @@ export class Bot {
     let bestScore = Infinity
     // mechs already fighting us (they hit us, or we hit them, recently). While any of them is in view,
     // only they are targets: never wake up a fresh enemy mid-fight.
-    const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory || (P.behaviorThreat && (tr.threatT ?? -99) > t - 2)) }
+    const engaged = (id: number) => { const tr = this.tracks.get(id); return !!tr && (tr.hitUsT > t - P.engagedMemory || tr.weHitT > t - P.engagedMemory) }
     let hostileNear = enemies.some((m) => !this.isPassive(m.id) && dist2(m.pos, pos) < P.engageRange)
     // just escaped a chase: no new fights with passive bots for a while (hostiles out of sight are still around)
     if (P.calmT > 0 && !hostileNear && (t - this.lastDmgT < P.calmT || [...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.calmT && dist2(tr.pos, pos) < 250))) hostileNear = true
@@ -899,6 +896,28 @@ export class Bot {
     this.faceThreats = []
     if (this.winHealing) { fire[0] = false; fire[1] = false }
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
+    // drastic flee experiment (P.fleeMode, off unless set): >= fleeCrowdN enemy mechs in view, or exactly one in view
+    // with our HP below fleeHp -> run for the rim of the next circle (fleeRim x R) on the side away from them, boosting.
+    // Keep shooting (gun / lightning; no NEW laser charge, it halves our speed). Held fleeHoldT s after the last trigger.
+    // Never while outside the zone (getting back in comes first).
+    if (P.fleeMode && !outside && this.mode !== "island" && this.mode !== "climb") {
+      const trig = enemies.length >= (P.fleeCrowdN ?? 3) || (enemies.length === 1 && me.hp < me.max_hp * (P.fleeHp ?? 0.4))
+      if (trig) this.xFleeUntil = t + (P.fleeHoldT ?? 3)
+      if (t < this.xFleeUntil) {
+        const z = obs.zone, c = z.next_center, R = z.next_radius
+        if (enemies.length) { let cx = 0, cy = 0; for (const m of enemies) { cx += m.pos[0]; cy += m.pos[1] } this.xFleeFrom = [cx / enemies.length, cy / enemies.length] }
+        const from = this.xFleeFrom ?? [c[0], c[1]]
+        let ax = pos[0] - from[0], ay = pos[1] - from[1]
+        const al = Math.hypot(ax, ay) || 1
+        ax /= al; ay /= al
+        const px = pos[0] + ax * 200 - c[0], py = pos[1] + ay * 200 - c[1], pl = Math.hypot(px, py) || 1
+        const rr = R * (P.fleeRim ?? 0.85)
+        move = this.followTo([c[0] + (px / pl) * rr, c[1] + (py / pl) * rr], pos, t)
+        boost = me.energy > (P.fleeBoostE ?? 10)
+        this.mode = "fleeX"
+        if (iLaser >= 0 && !((slots[iLaser]?.charge ?? 0) > 0)) fire[iLaser] = false
+      }
+    }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
     if (!Number.isFinite(aim[0]) || !Number.isFinite(aim[1])) aim = [me.aim[0], 0]
@@ -931,12 +950,6 @@ export class Bot {
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
-      if (P.behaviorThreat && m.kind === "mech") {
-        const me0 = obs.self.pos, dx = me0[0] - m.pos[0], dy = me0[1] - m.pos[1], d = Math.hypot(dx, dy)
-        const aimingAtUs = !!m.aim && d < P.btAimR && angDiff(m.aim[0], Math.atan2(dy, dx)) < Math.max(0.12, Math.atan2(5, Math.max(d, 1)))
-        const closing = d > 1 && m.vel ? ((m.vel[0] * dx + m.vel[1] * dy) / d) : 0
-        if (aimingAtUs || (closing > P.btClosing && d < P.btCloseR) || d < P.btNear) tr.threatT = obs.t
-      }
     }
     for (const [id, tr] of this.tracks) if (obs.t - tr.seenT > 30) this.tracks.delete(id)
     // pickups: remember what we see; forget ones that should be visible nearby but are not
@@ -1508,7 +1521,6 @@ export class Bot {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
     if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
-    if (P.behaviorThreat && (tr.threatT ?? -99) > this.nowT - 3) return false // aiming at us / closing in: a threat
     if (P.passiveNear > 0) {
       // a bot that has walked up close, or is closing in on us, is a threat whether or not it has fired yet
       const d = dist2(tr.pos, this.myPos)
