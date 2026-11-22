@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11q",
+  "name": "mr-v11r",
   "upgrades": [
     "armor",
     "plating",
@@ -134,7 +134,7 @@
   "ffaCloseRange": 60,
   "ffaEndgameAlive": 4,
   "ffaEscapeHp": 0.35,
-  "farmNpc": false,
+  "farmNpc": true,
   "farmStopT": 180,
   "farmMinHp": 0.6,
   "farmQuiet": 8,
@@ -299,7 +299,7 @@
   "passiveNear": 80,
   "passiveClosing": 30,
   "climbStall": 3,
-  "recoverHp": 0.6,
+  "recoverHp": 0,
   "recoverHitT": 4,
   "passiveSplit": false
 }
