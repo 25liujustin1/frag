@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; otherDmgT?: number }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number }
 
 export class Bot {
   name: string = P.name
@@ -54,13 +54,6 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
-  private coverHeal = false
-  private coverSeen = 99
-  private healing = false
-  private healCover: V2 | null = null
-  private healCoverT = -99
-  private dmgLog: { by: number; amt: number; t: number }[] = []
-  private myPos: V3 = [0, 0, 0]
   private pincerUntil = -1
   private flankT = -99
   private flankAim = 0
@@ -219,8 +212,6 @@ export class Bot {
     const pos = me.pos as V3
     const act: Omit<Action, "tick"> = {}
 
-    this.myPos = obs.self.pos as V3
-    if (this.dmgLog.length > 200 || (this.dmgLog.length && this.dmgLog[0].t < obs.t - 10)) this.dmgLog = this.dmgLog.filter((h) => h.t > obs.t - 10)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -244,7 +235,6 @@ export class Bot {
         const tr = e.by != null ? this.tracks.get(e.by) : undefined
         if (tr) tr.hitUsT = t
         if (e.by != null) this.hitBy.set(e.by, t) // remember even if we haven't seen the shooter yet
-        if (e.by != null) this.dmgLog.push({ by: e.by, amt: e.amount, t })
         // flank alarm: shot by a bot we can't see right now -> look toward the shot (once per 2 s)
         if (P.flankLook && e.bearing != null && !obs.mechs.some((m) => m.id === e.by) && t - this.flankT > P.flankEvery && e.weapon !== "npc") {
           this.flankT = t; this.flankAim = e.bearing; this.flankUntil = t + P.flankDur
@@ -319,7 +309,7 @@ export class Bot {
     if (this.ffa && !fighting.length) {
       // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
       // (very close mechs), or fight it out in the endgame.
-      pool = pool.filter((m) => m.kind === "npc" || (P.vultureFfa && (this.tracks.get(m.id)?.otherDmgT ?? -99) > t - P.vultureWin) || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
+      pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
     } else if (this.survNow && !this.ffa && !fighting.length) {
       // survivor (practice experiment): never start a fight; only fight back, or finish a badly hurt mech
       pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.survWeakFrac || dist2(m.pos, pos) < P.survCloseRange)
@@ -334,25 +324,14 @@ export class Bot {
       if (P.attackerFirst) {
         // whoever is shooting us comes first (weakest attacker first, via the hp term); passive bots wait
         const attacking = !!tr && tr.hitUsT > t - P.attackerWindow
-        if (attacking) {
-          s -= P.attackerPri
-          // among attackers: whoever is hurting us most right now, and the closer one, before the merely weak one
-          if (P.threatFirst) {
-            let dmg = 0
-            for (const h of this.dmgLog) if (h.by === m.id && h.t > t - 5) dmg += h.amt
-            s -= dmg / P.threatDmgDiv
-            s += d / P.threatDistDiv
-          }
-        }
+        if (attacking) s -= P.attackerPri
         else if (anyAttacker) s += P.nonAttackerPen
         if (m.id === this.curTarget && (attacking || !anyAttacker)) s -= P.targetStick
       } else {
         if (tr && tr.hitUsT > t - 3) s -= 1.5
         if (m.id === this.curTarget) s -= P.targetStick // finish what we started
       }
-      if (P.closeFirst && m.kind === "mech" && d < P.closeR) s -= P.closePri // deal with the close one first
       if (m.kind === "npc") s += 2
-      if (P.vultureW && tr && (tr.otherDmgT ?? -99) > t - P.vultureWin) s -= P.vultureW // third-party: it's busy with someone else
       if (P.counterW && m.kind === "mech") {
         // weapon triangle: laser > mortar > lightning > laser. Prefer targets we counter, avoid ones that counter us.
         const mine = slots.filter(Boolean).map((w) => w!.kind), theirs = m.weapons ?? []
@@ -404,22 +383,15 @@ export class Bot {
 
       // choose primary aim
       let mortarSol: { yaw: number; pitch: number } | null = null
-      const gunG = iGun >= 0 ? slots[iGun]! : null
-      const gunReloading = !!gunG && ((gunG.ammo ?? 0) === 0 || (gunG.reload ?? 0) > 0)
-      const mortarFill = P.mortarReload && gunReloading // gun is reloading: lob mortar shells meanwhile
-      if (mortar && mortar.cooldown <= 0.15 && tgtDist > (mortarFill ? 20 : 28) && (!tgtLos || tgtDist > 70 || mortarFill)) {
+      if (mortar && mortar.cooldown <= 0.15 && tgtDist > 28 && (!tgtLos || tgtDist > 70)) {
         const ms = mortar.stats
-        let mm: V3 = [pos[0], pos[1], pos[2] + me.stats.height + 0.5]
-        if (P.muzzleFix) {
-          const sz = 1 + ((this.hello.config as any).cubes?.size_per_cube ?? 0.05) * me.cubes, fwd = ((this.hello.config.mech as any).radius ?? 2.5) * sz + 0.4
-          mm = [pos[0] + Math.cos(me.aim[0]) * fwd, pos[1] + Math.sin(me.aim[0]) * fwd, pos[2] + ((this.hello.config.mech as any).height ?? 9) * sz + 0.5]
-        }
+        const mm: V3 = [pos[0], pos[1], pos[2] + me.stats.height + 0.5]
         mortarSol = mortarSolve(this.r, mm, [target.pos[0], target.pos[1], target.pos[2]], tv, ms.speed, ms.gravity, false, me.stats.min_pitch, me.stats.max_pitch)
           ?? mortarSolve(this.r, mm, [target.pos[0], target.pos[1], target.pos[2]], tv, ms.speed, ms.gravity, true, me.stats.min_pitch, me.stats.max_pitch)
       }
       if (laser && (laserCharging || (laser.cooldown <= 0.1 && tgtLos && tgtDist < laser.stats.range))) aim = hitscanAim
       else if (light && tgtDist < light.stats.range + 5 && tgtLos) aim = hitscanAim
-      else if (mortarSol && (mortarFill || !(tgtLos && tgtDist < 120 && iGun >= 0 && (slots[iGun]!.ammo ?? 0) > 0))) aim = [mortarSol.yaw, mortarSol.pitch]
+      else if (mortarSol && !(tgtLos && tgtDist < 120 && iGun >= 0 && (slots[iGun]!.ammo ?? 0) > 0)) aim = [mortarSol.yaw, mortarSol.pitch]
       else aim = gunAim ?? hitscanAim
 
       // ambush / surprise: is the target unaware of us (not fighting us, facing away)? Is it coming
@@ -479,14 +451,7 @@ export class Bot {
     this.gunOnly = gunOnly
     this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
-    // heal window: hurt, nobody close, nothing hitting us -> stop dealing damage (it resets regen) and hide
-    const nearBot = [...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < 3 && dist2(tr.pos, pos) < P.healSafeR)
-    if (P.healWait) {
-      if (!this.healing && me.hp < me.max_hp * P.healBelow && !nearBot && t - this.lastDmgT > 2) this.healing = true
-      if (this.healing && (me.hp >= me.max_hp * P.healUntil || nearBot || t - this.lastDmgT < 0.5)) this.healing = false
-    }
-    const healMode = P.healWait && this.healing
-    if (!healMode && !target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
+    if (!target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
@@ -524,14 +489,7 @@ export class Bot {
         if (angDiff(yawTo(pos, att[i].pos), yawTo(pos, att[j].pos)) > P.pincerAng) { pincer = true; break }
       if (pincer) this.pincerUntil = t + P.pincerHold
     }
-    if (P.coverV3) {
-      let minD = Infinity
-      for (const tr of this.tracks.values()) if (tr.id < 100 && t - tr.seenT < 8 && !this.isPassive(tr.id)) minD = Math.min(minD, dist2(tr.pos, pos))
-      const atCover = !!this.coverAt && dist2(this.coverAt, pos) < 5
-      this.coverHeal = this.retreating && atCover && me.hp < me.max_hp * P.coverHealHp && t - this.lastDmgT > 1 &&
-        minD > P.coverHealNear && (this.coverHeal || minD > P.coverHealFar)
-    }
-    if (this.retreating && !this.coverHeal && t > this.pincerUntil && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
+    if (this.retreating && t > this.pincerUntil && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
     if (!pushing && (lowHp || odds < retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
     if (pincer) this.retreating = true
     // reset after a kill: heal up in cover before the next hunter arrives
@@ -606,49 +564,23 @@ export class Bot {
         if (grab.drop != null) act.drop = grab.drop
       }
       boost = gd > 25 && me.energy > this.reserve + 20
-    } else if (healMode && !outside) {
-      this.mode = "heal"
-      const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 15).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
-      let cover: V2 | null = this.healCover && t - this.healCoverT < 4 ? this.healCover : null
-      if (!cover && threats.length) { cover = this.findCover(pos, threats, obs); this.healCover = cover; this.healCoverT = t }
-      if (cover && dist2(cover, pos) > 3) move = this.followTo(cover, pos, t)
-      else {
-        const h = this.holdSpot(obs, pos)
-        move = h && Math.hypot(h.x - pos[0], h.y - pos[1]) > 3 ? this.followTo([h.x, h.y], pos, t) : [0, 0]
-      }
-    } else if (this.retreating && (target || underFire || this.coverHeal)) {
-      this.mode = this.coverHeal ? "coverheal" : "retreat"
+    } else if (this.retreating && (target || underFire)) {
+      this.mode = "retreat"
       // hide from every enemy seen recently, not just the ones in view this tick
       const threats = (P.retreatV2 ? [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8).map((tr) => tr.pos) : enemies.filter((m) => !this.isPassive(m.id)).map((m) => m.pos))
         .map((p) => [p[0], p[1], p[2] + 8] as V3)
       if (threats.length === 0 && underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
       let cover: V2 | null = null
-      if (P.coverV3) {
-        const th3 = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8 && (!this.isPassive(tr.id) || dist2(tr.pos, pos) < 90)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
-        if (th3.length === 0 && underFire) th3.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
-        const seenFrom = (c: V2) => { const gz = this.r.groundAt(c[0], c[1]); let n = 0; for (const th of th3) if (this.r.los(th[0], th[1], th[2], c[0], c[1], gz + 4.5, 1)) n++; return n }
-        // keep the chosen spot while it's still at least as hidden as when we picked it
-        if (this.coverAt && t - this.coverT < P.coverCommit3 && seenFrom(this.coverAt) <= (P.coverStrict ? 0 : this.coverSeen)) cover = this.coverAt
-        if (!cover) {
-          const r3 = this.findCover3(pos, th3, obs)
-          cover = r3 ? r3.c : null; this.coverSeen = r3 ? r3.seen : 99; this.coverAt = cover; this.coverT = t
-        }
-        if (cover) move = dist2(cover, pos) > 2 || !P.coverStill ? this.followTo(cover, pos, t) : [0, 0]
-        else if (th3.length >= 2) move = this.gapDir(pos, th3)
-        else move = this.combatDir(pos, target ? target.pos as V3 : th3[0], 9999, 9999, obs)
-        boost = me.energy > (iLight >= 0 ? 25 : 8) && dist2(cover ?? pos, pos) > 6
-      } else if (P.retreatV2 && this.coverAt && t - this.coverT < P.coverCommit) {
+      if (P.retreatV2 && this.coverAt && t - this.coverT < P.coverCommit) {
         // keep the spot we picked unless an enemy can now see it
         const c = this.coverAt, gz = this.r.groundAt(c[0], c[1])
         if (!threats.some((th) => this.r.los(th[0], th[1], th[2], c[0], c[1], gz + 4.5, 1))) cover = c
       }
-      if (!P.coverV3) {
-        if (!cover) { cover = this.findCover(pos, threats, obs); this.coverAt = cover; this.coverT = t }
-        if (cover) move = this.followTo(cover, pos, t)
-        else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
-        else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
-        boost = me.energy > (P.retreatV2 ? 8 : 30)
-      }
+      if (!cover) { cover = this.findCover(pos, threats, obs); this.coverAt = cover; this.coverT = t }
+      if (cover) move = this.followTo(cover, pos, t)
+      else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
+      else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
+      boost = me.energy > (P.retreatV2 ? 8 : 30)
     } else if (target && (tgtDist < P.engageRange) && target.kind === "mech" && !edgeRun) {
       this.mode = "fight"
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
@@ -867,7 +799,6 @@ export class Bot {
         this.stuckRefT = t
       }
     }
-    if (healMode) { fire[0] = false; fire[1] = false }
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
@@ -898,8 +829,6 @@ export class Bot {
       }
       if (m.kind === "mech" && dist2(m.pos, obs.self.pos) < 150) tr.watchT += 0.1 // time we've had it in view nearby
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
-      // third-party marker: it lost HP and it wasn't us (someone else is fighting it)
-      if (m.kind === "mech" && m.hp != null && m.hp < tr.hp - 1 && obs.t - tr.weHitT > 0.4) tr.otherDmgT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
     }
@@ -1472,10 +1401,7 @@ export class Bot {
   private isPassive(id: number): boolean {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
-    if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
-    // a bot that has walked up close is a threat, shots or not
-    if (P.closeFirst && dist2(tr.pos, this.myPos) < P.passiveNear) return false
-    return true
+    return !!tr && tr.hitUsT < 0 && tr.watchT >= P.passiveAfter
   }
 
   /** Highest solid or ground surface at (x, y). */
@@ -1660,36 +1586,6 @@ export class Bot {
     }
     this.spotCache = { t, tid: target.id, spot: best }
     return best
-  }
-
-  /** Cover from every recent threat: widen the search until a fully hidden spot turns up (out to 120 m);
-   *  otherwise the spot hidden from the most of them (partial cover turns a 1v2 into a 1v1). */
-  private findCover3(pos: V3, threats: V3[], obs: Observation): { c: V2; seen: number } | null {
-    if (!threats.length) return null
-    const z = obs.zone
-    let partial: V2 | null = null, pSeen = threats.length, pCost = Infinity
-    for (const R of P.coverRings as number[]) {
-      let best: V2 | null = null, bd = Infinity
-      const nDir = R > 40 ? 32 : 24
-      for (let k = 0; k < nDir; k++) {
-        const a = (k / nDir) * Math.PI * 2
-        const x = pos[0] + Math.cos(a) * R, y = pos[1] + Math.sin(a) * R
-        const n = this.nav.nodeAt(x, y)
-        if (!this.nav.isMain(n) || dist2(z.center, [x, y]) > z.radius - 5) continue
-        const gz = this.r.groundAt(x, y)
-        let seen = 0
-        for (const th of threats) if (this.r.los(th[0], th[1], th[2], x, y, gz + 4.5, 1)) { seen++; if (best && seen > 0) break }
-        let away = 0
-        for (const th of threats) away += Math.hypot(x - th[0], y - th[1]) < Math.hypot(pos[0] - th[0], pos[1] - th[1]) ? 15 : 0
-        const cost = R + away
-        if (seen === 0 && cost < bd) { bd = cost; best = [x, y] }
-        else if (seen > 0 && seen < threats.length && (seen < pSeen || (seen === pSeen && cost < pCost))) { pSeen = seen; pCost = cost; partial = [x, y] }
-      }
-      if (best) return { c: best, seen: 0 }
-      // partial cover close by beats running far for full cover only up to the partial-cover range
-      if (partial && R >= P.coverPartialR) return { c: partial, seen: pSeen }
-    }
-    return partial ? { c: partial, seen: pSeen } : null
   }
 
   private findCover(pos: V3, threats: V3[], obs: Observation): V2 | null {

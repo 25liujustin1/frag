@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11k",
+  "name": "mr-v11l",
   "upgrades": [
     "armor",
     "plating",
@@ -40,8 +40,8 @@
       38
     ],
     "gun": [
-      35,
-      90
+      90,
+      150
     ],
     "mortar": [
       60,
@@ -264,7 +264,7 @@
   "edgeArrive": 20,
   "edgeMaxT": 100,
   "edgeHoldMinR": 140,
-  "edgeLootR": 120,
+  "edgeLootR": 60,
   "lightAvoid": false,
   "lightAvoidR": 55,
   "lightAvoidW": 3,
@@ -281,38 +281,5 @@
   "pincerR": 150,
   "pincerNear": 90,
   "pincerAng": 0.87,
-  "pincerHold": 4,
-  "closeFirst": false,
-  "passiveNear": 80,
-  "closeR": 70,
-  "closePri": 3,
-  "threatFirst": false,
-  "threatDmgDiv": 200,
-  "threatDistDiv": 60,
-  "healWait": false,
-  "healBelow": 0.6,
-  "healUntil": 0.85,
-  "healSafeR": 130,
-  "vultureW": 0,
-  "vultureWin": 4,
-  "vultureFfa": false,
-  "mortarReload": false,
-  "coverV3": true,
-  "coverRings": [
-    8,
-    16,
-    26,
-    38,
-    52,
-    70,
-    95,
-    120
-  ],
-  "coverCommit3": 2,
-  "coverPartialR": 38,
-  "coverHealHp": 0.85,
-  "coverHealFar": 100,
-  "coverHealNear": 60,
-  "coverStill": true,
-  "coverStrict": true
+  "pincerHold": 4
 }
