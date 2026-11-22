@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11l",
+  "name": "mr-v11m",
   "upgrades": [
     "armor",
     "plating",
@@ -40,8 +40,8 @@
       38
     ],
     "gun": [
-      90,
-      150
+      35,
+      90
     ],
     "mortar": [
       60,
@@ -281,5 +281,15 @@
   "pincerR": 150,
   "pincerNear": 90,
   "pincerAng": 0.87,
-  "pincerHold": 4
+  "pincerHold": 4,
+  "faceBoth": false,
+  "faceSeenT": 4,
+  "faceMarginDeg": 10,
+  "calmT": 0,
+  "eyesHitT": 10,
+  "retreatMem": 8,
+  "healAfterWin": false,
+  "winHealMax": 30,
+  "winHealHp": 0.85,
+  "winSafeR": 120
 }
