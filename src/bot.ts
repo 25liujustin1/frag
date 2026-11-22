@@ -82,6 +82,8 @@ export class Bot {
   private coverT = -99
   private soundContacts: { pos: V3; t: number }[] = []
   private zoneEdgeDist = 999
+  private edgeBounds = { minX: -500, maxX: 500, minY: -300, maxY: 300 }
+  private edgeDone = false
   private campAnchor: V2 | null = null
   private campT = 0
   ffa = false
@@ -107,6 +109,7 @@ export class Bot {
     if (!dir || !existsSync(dir + "/v2/world.json")) dir = ROOT + "arena"
     const t0 = performance.now()
     this.r = Raster.fromMapDir(dir)
+    this.edgeBounds = { minX: this.r.minX, maxX: this.r.minX + this.r.nx - 1, minY: this.r.minY, maxY: this.r.minY + this.r.ny - 1 }
     const m = hello.config.mech
     this.nav = new Nav(this.r, { height: m.height, stepUp: m.step_up, minClear: m.radius + 0.5 })
     log(`map ${dir} loaded in ${(performance.now() - t0).toFixed(0)} ms`)
@@ -430,6 +433,9 @@ export class Bot {
 
     // ---- movement
     const zoneGoal = this.zoneGoal(obs)
+    // edge run (start of match): head for the edge first. Keep shooting whatever we target, but don't close in.
+    if (P.edgeMode && !this.edgeDone && (t > P.edgeMaxT || (t > 3 && !zoneGoal))) this.edgeDone = true
+    const edgeRun = P.edgeMode && !this.edgeDone
     const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
     // free-for-all (qualifying/final): survival first. Retreat earlier, come back healthier, flee sooner.
     const ffaSafe = this.ffa && P.ffaSurvive && obs.alive > P.ffaEndgameAlive
@@ -531,7 +537,7 @@ export class Bot {
       else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
       else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
       boost = me.energy > (P.retreatV2 ? 8 : 30)
-    } else if (target && (tgtDist < P.engageRange) && target.kind === "mech") {
+    } else if (target && (tgtDist < P.engageRange) && target.kind === "mech" && !edgeRun) {
       this.mode = "fight"
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
       const tw = target.weapons ?? []
@@ -608,13 +614,13 @@ export class Bot {
         boost = !me.grounded && pos[2] - this.scoutZ < P.scoutHeight && me.energy > 20
         this.sweep = wrap(this.sweep + 0.4)
         aim = [this.sweep, -0.2]
-      } else if (dropAt && !outside && zoneSlack > P.dropZoneSlack && this.zoneEdgeDist > P.dropEdgeMargin) {
+      } else if (dropAt && !edgeRun && !outside && zoneSlack > P.dropZoneSlack && this.zoneEdgeDist > P.dropEdgeMargin) {
         // supply drop: full HP + full energy + 3 cubes for standing in the ring alone for 4 s
         this.mode = "drop"
         const dd = dist2(dropAt, pos)
         move = dd > P.dropStand ? this.followTo(dropAt, pos, t) : [0, 0]
         boost = dd > 40 && me.energy > this.reserve + 20
-      } else if (loot && !outside) {
+      } else if (loot && !outside && (!edgeRun || dist2(loot.pos, pos) < P.edgeLootR)) {
         this.mode = loot.takeId != null ? (loot.climb ? "climb" : "loot") : loot.explore ? "explore" : "collect"
         if (loot.climb) {
           // give up on a roof pickup we can't reach in time (never stand at a wall jumping forever)
@@ -860,9 +866,32 @@ export class Bot {
   }
 
   /** A point inside the circle the zone is shrinking to; null if we are already well inside. */
+  /** Edge play: a spot on our side near the map edge, kept inside the next safe circle. */
+  private edgeGoal(obs: Observation): V2 {
+    const z = obs.zone, pos = obs.self.pos
+    const c = z.next_center, R = z.next_radius
+    let dx = pos[0] - c[0], dy = pos[1] - c[1]
+    const d = Math.hypot(dx, dy)
+    if (d < 1) { dx = 1; dy = 0 } else { dx /= d; dy /= d }
+    // distance along our ray from the zone centre to the map edge (minus a margin)
+    const b = this.edgeBounds, m = P.edgeMapMargin
+    let tMap = Infinity
+    if (dx > 1e-6) tMap = Math.min(tMap, (b.maxX - m - c[0]) / dx)
+    if (dx < -1e-6) tMap = Math.min(tMap, (b.minX + m - c[0]) / dx)
+    if (dy > 1e-6) tMap = Math.min(tMap, (b.maxY - m - c[1]) / dy)
+    if (dy < -1e-6) tMap = Math.min(tMap, (b.minY + m - c[1]) / dy)
+    const reach = Math.max(0, Math.min(tMap, R * P.edgeFrac))
+    return [c[0] + dx * reach, c[1] + dy * reach]
+  }
+
   private zoneGoal(obs: Observation): V2 | null {
     const z = obs.zone, pos = obs.self.pos
     const c = z.next_center, R = z.next_radius
+    // edge play: until the zone gets small, our resting spot is at the edge, not the interior
+    if (P.edgeMode && R > P.edgeHoldMinR) {
+      const g = this.edgeGoal(obs)
+      return dist2(g, pos) > P.edgeArrive ? g : null
+    }
     // final phases: stand at the exact centre (the last mech inside the closing circle outlives the rest)
     const inner = R <= P.finalCenterR ? 1.5 : Math.max(R * (this.survNow ? P.survZoneInnerFrac : P.zoneInnerFrac), Math.min(R, 6))
     const d = dist2(c, pos)

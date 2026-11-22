@@ -1,5 +1,5 @@
 {
-  "name": "mr-v10c",
+  "name": "mr-v11",
   "upgrades": [
     "armor",
     "plating",
@@ -257,5 +257,12 @@
     "default": 0.05
   },
   "fleeAll": false,
-  "fleeReplan": 2
+  "fleeReplan": 2,
+  "edgeMode": true,
+  "edgeFrac": 0.9,
+  "edgeMapMargin": 25,
+  "edgeArrive": 20,
+  "edgeMaxT": 100,
+  "edgeHoldMinR": 140,
+  "edgeLootR": 60
 }
