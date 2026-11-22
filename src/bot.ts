@@ -54,6 +54,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private antiLights: V3[] = []
   private climbStillT = -1
   private myPos: V3 = [0, 0, 0]
   private nowT = 0
@@ -226,6 +227,8 @@ export class Bot {
 
     if (this.recentHits.length && this.recentHits[0].t < obs.t - 5) this.recentHits = this.recentHits.filter((h) => h.t > obs.t - 5)
     this.myPos = obs.self.pos as V3; this.nowT = obs.t
+    this.antiLights = []
+    if (P.antiLight && !this.hasLight) for (const tr of this.tracks.values()) if (tr.id < 100 && obs.t - tr.seenT < P.antiLightMem && tr.weapons.includes("lightning")) this.antiLights.push(tr.pos)
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -657,7 +660,7 @@ export class Bot {
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
       const tw = target.weapons ?? []
       // stay out of lightning reach unless we have it too; lightning shorts laser users, so close in on them
-      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], 55), Math.max(band[1], 100)]
+      if (tw.includes("lightning") && iLight < 0) band = [Math.max(band[0], P.antiLight ? P.antiLightR : 55), Math.max(band[1], 100)]
       else if (iLight >= 0 && tw.includes("laser") && !tw.includes("lightning")) band = [...P.bands.lightning]
       // can anything fire soon? (gun loaded, laser off cooldown, lightning in range with energy)
       const ready = slots.some((w) => {
@@ -1155,7 +1158,7 @@ export class Bot {
     }
     if (this.wantCubes(obs.self.cubes)) for (const c of this.cubeMem.values()) {
       const d = dist2(c, pos)
-      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
+      if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
       let n = 0
       for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
       const s = n * P.grabCubeV - d
@@ -1166,7 +1169,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d)) continue
+      if (d > P.grabRange || !this.reachable(p.pos) || !this.inZoneSoon(obs, p.pos) || !safe(p.pos, d) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       const s = take.gain * P.grabWeaponV - d
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop } }
     }
@@ -1210,7 +1213,7 @@ export class Bot {
       let bc: V3 | null = null, bcs = -Infinity
       for (const c of this.cubeMem.values()) {
         const d = dist2(c, pos)
-        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c)) continue
+        if (d > P.cubeRange || !this.inZoneSoon(obs, c) || !this.reachable(c) || this.antiLights.some((l) => Math.hypot(l[0] - c[0], l[1] - c[1]) < P.antiLightR)) continue
         let n = 0
         for (const o of this.cubeMem.values()) if (dist2(o, c) < 6) n++
         const s = n * 40 - d * 0.5
@@ -1231,7 +1234,7 @@ export class Bot {
       const take = this.takeDecision(p.kind, slots)
       if (!take) continue
       const d = dist2(p.pos, pos)
-      if (d > range || !this.inZoneSoon(obs, p.pos)) continue
+      if (d > range || !this.inZoneSoon(obs, p.pos) || this.antiLights.some((l) => Math.hypot(l[0] - p.pos[0], l[1] - p.pos[1]) < P.antiLightR)) continue
       let climb: V2 | undefined
       if (this.badLoot.has(id)) continue
       if (!this.reachable(p.pos)) {
@@ -1697,6 +1700,7 @@ export class Bot {
           for (const th of threats) { if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue; cx += th[0]; cy += th[1]; n++ }
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
+        if (P.antiLight) for (const l of this.antiLights) if (Math.hypot(l[0] - x, l[1] - y) < P.antiLightR) { s += P.antiLightW; break }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target

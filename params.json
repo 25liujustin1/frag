@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11z-trustclock",
+  "name": "mr-final-laser",
   "upgrades": [
     "armor",
     "plating",
@@ -53,10 +53,10 @@
   "lootStopT": 200,
   "crateRange": 70,
   "crateStopT": 150,
-  "searchStopT": 180,
+  "searchStopT": 240,
   "cubeStopT": 300,
   "cubeRange": 220,
-  "lootRangeSearch": 250,
+  "lootRangeSearch": 320,
   "crateShootRange": 120,
   "crateSeekRange": 200,
   "scanAmp": 1,
@@ -307,5 +307,9 @@
   "btAimR": 190,
   "btClosing": 3,
   "btCloseR": 180,
-  "btNear": 40
+  "btNear": 40,
+  "antiLight": true,
+  "antiLightR": 59,
+  "antiLightW": 6,
+  "antiLightMem": 6
 }
