@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11j",
+  "name": "mr-v11k",
   "upgrades": [
     "armor",
     "plating",
@@ -296,5 +296,23 @@
   "vultureW": 0,
   "vultureWin": 4,
   "vultureFfa": false,
-  "mortarReload": true
+  "mortarReload": false,
+  "coverV3": true,
+  "coverRings": [
+    8,
+    16,
+    26,
+    38,
+    52,
+    70,
+    95,
+    120
+  ],
+  "coverCommit3": 2,
+  "coverPartialR": 38,
+  "coverHealHp": 0.85,
+  "coverHealFar": 100,
+  "coverHealNear": 60,
+  "coverStill": true,
+  "coverStrict": true
 }

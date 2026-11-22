@@ -54,6 +54,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private coverHeal = false
+  private coverSeen = 99
   private healing = false
   private healCover: V2 | null = null
   private healCoverT = -99
@@ -522,7 +524,14 @@ export class Bot {
         if (angDiff(yawTo(pos, att[i].pos), yawTo(pos, att[j].pos)) > P.pincerAng) { pincer = true; break }
       if (pincer) this.pincerUntil = t + P.pincerHold
     }
-    if (this.retreating && t > this.pincerUntil && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
+    if (P.coverV3) {
+      let minD = Infinity
+      for (const tr of this.tracks.values()) if (tr.id < 100 && t - tr.seenT < 8 && !this.isPassive(tr.id)) minD = Math.min(minD, dist2(tr.pos, pos))
+      const atCover = !!this.coverAt && dist2(this.coverAt, pos) < 5
+      this.coverHeal = this.retreating && atCover && me.hp < me.max_hp * P.coverHealHp && t - this.lastDmgT > 1 &&
+        minD > P.coverHealNear && (this.coverHeal || minD > P.coverHealFar)
+    }
+    if (this.retreating && !this.coverHeal && t > this.pincerUntil && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
     if (!pushing && (lowHp || odds < retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
     if (pincer) this.retreating = true
     // reset after a kill: heal up in cover before the next hunter arrives
@@ -607,23 +616,39 @@ export class Bot {
         const h = this.holdSpot(obs, pos)
         move = h && Math.hypot(h.x - pos[0], h.y - pos[1]) > 3 ? this.followTo([h.x, h.y], pos, t) : [0, 0]
       }
-    } else if (this.retreating && (target || underFire)) {
-      this.mode = "retreat"
+    } else if (this.retreating && (target || underFire || this.coverHeal)) {
+      this.mode = this.coverHeal ? "coverheal" : "retreat"
       // hide from every enemy seen recently, not just the ones in view this tick
       const threats = (P.retreatV2 ? [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8).map((tr) => tr.pos) : enemies.filter((m) => !this.isPassive(m.id)).map((m) => m.pos))
         .map((p) => [p[0], p[1], p[2] + 8] as V3)
       if (threats.length === 0 && underFire) threats.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
       let cover: V2 | null = null
-      if (P.retreatV2 && this.coverAt && t - this.coverT < P.coverCommit) {
+      if (P.coverV3) {
+        const th3 = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 8 && (!this.isPassive(tr.id) || dist2(tr.pos, pos) < 90)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+        if (th3.length === 0 && underFire) th3.push([pos[0] + Math.cos(this.lastDmgBearing) * 80, pos[1] + Math.sin(this.lastDmgBearing) * 80, pos[2] + 8])
+        const seenFrom = (c: V2) => { const gz = this.r.groundAt(c[0], c[1]); let n = 0; for (const th of th3) if (this.r.los(th[0], th[1], th[2], c[0], c[1], gz + 4.5, 1)) n++; return n }
+        // keep the chosen spot while it's still at least as hidden as when we picked it
+        if (this.coverAt && t - this.coverT < P.coverCommit3 && seenFrom(this.coverAt) <= (P.coverStrict ? 0 : this.coverSeen)) cover = this.coverAt
+        if (!cover) {
+          const r3 = this.findCover3(pos, th3, obs)
+          cover = r3 ? r3.c : null; this.coverSeen = r3 ? r3.seen : 99; this.coverAt = cover; this.coverT = t
+        }
+        if (cover) move = dist2(cover, pos) > 2 || !P.coverStill ? this.followTo(cover, pos, t) : [0, 0]
+        else if (th3.length >= 2) move = this.gapDir(pos, th3)
+        else move = this.combatDir(pos, target ? target.pos as V3 : th3[0], 9999, 9999, obs)
+        boost = me.energy > (iLight >= 0 ? 25 : 8) && dist2(cover ?? pos, pos) > 6
+      } else if (P.retreatV2 && this.coverAt && t - this.coverT < P.coverCommit) {
         // keep the spot we picked unless an enemy can now see it
         const c = this.coverAt, gz = this.r.groundAt(c[0], c[1])
         if (!threats.some((th) => this.r.los(th[0], th[1], th[2], c[0], c[1], gz + 4.5, 1))) cover = c
       }
-      if (!cover) { cover = this.findCover(pos, threats, obs); this.coverAt = cover; this.coverT = t }
-      if (cover) move = this.followTo(cover, pos, t)
-      else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
-      else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
-      boost = me.energy > (P.retreatV2 ? 8 : 30)
+      if (!P.coverV3) {
+        if (!cover) { cover = this.findCover(pos, threats, obs); this.coverAt = cover; this.coverT = t }
+        if (cover) move = this.followTo(cover, pos, t)
+        else if (P.retreatV2 && threats.length >= 2) move = this.gapDir(pos, threats)
+        else move = this.combatDir(pos, target ? target.pos as V3 : threats[0], 9999, 9999, obs)
+        boost = me.energy > (P.retreatV2 ? 8 : 30)
+      }
     } else if (target && (tgtDist < P.engageRange) && target.kind === "mech" && !edgeRun) {
       this.mode = "fight"
       let band: number[] = [...(P.bands[best] ?? P.bands.gun)]
@@ -1635,6 +1660,36 @@ export class Bot {
     }
     this.spotCache = { t, tid: target.id, spot: best }
     return best
+  }
+
+  /** Cover from every recent threat: widen the search until a fully hidden spot turns up (out to 120 m);
+   *  otherwise the spot hidden from the most of them (partial cover turns a 1v2 into a 1v1). */
+  private findCover3(pos: V3, threats: V3[], obs: Observation): { c: V2; seen: number } | null {
+    if (!threats.length) return null
+    const z = obs.zone
+    let partial: V2 | null = null, pSeen = threats.length, pCost = Infinity
+    for (const R of P.coverRings as number[]) {
+      let best: V2 | null = null, bd = Infinity
+      const nDir = R > 40 ? 32 : 24
+      for (let k = 0; k < nDir; k++) {
+        const a = (k / nDir) * Math.PI * 2
+        const x = pos[0] + Math.cos(a) * R, y = pos[1] + Math.sin(a) * R
+        const n = this.nav.nodeAt(x, y)
+        if (!this.nav.isMain(n) || dist2(z.center, [x, y]) > z.radius - 5) continue
+        const gz = this.r.groundAt(x, y)
+        let seen = 0
+        for (const th of threats) if (this.r.los(th[0], th[1], th[2], x, y, gz + 4.5, 1)) { seen++; if (best && seen > 0) break }
+        let away = 0
+        for (const th of threats) away += Math.hypot(x - th[0], y - th[1]) < Math.hypot(pos[0] - th[0], pos[1] - th[1]) ? 15 : 0
+        const cost = R + away
+        if (seen === 0 && cost < bd) { bd = cost; best = [x, y] }
+        else if (seen > 0 && seen < threats.length && (seen < pSeen || (seen === pSeen && cost < pCost))) { pSeen = seen; pCost = cost; partial = [x, y] }
+      }
+      if (best) return { c: best, seen: 0 }
+      // partial cover close by beats running far for full cover only up to the partial-cover range
+      if (partial && R >= P.coverPartialR) return { c: partial, seen: pSeen }
+    }
+    return partial ? { c: partial, seen: pSeen } : null
   }
 
   private findCover(pos: V3, threats: V3[], obs: Observation): V2 | null {
