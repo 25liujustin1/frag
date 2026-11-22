@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11o",
+  "name": "mr-v11p",
   "upgrades": [
     "armor",
     "plating",
@@ -295,5 +295,8 @@
   "kite": true,
   "kiteMemT": 30,
   "kiteDriftW": 2,
-  "wedgeClear": 1
+  "wedgeClear": 1,
+  "passiveNear": 80,
+  "passiveClosing": 30,
+  "climbStall": 3
 }

@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; approach?: { t: number; d0: number } }
 
 export class Bot {
   name: string = P.name
@@ -54,6 +54,9 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private climbStillT = -1
+  private myPos: V3 = [0, 0, 0]
+  private nowT = 0
   private winHealUntil = -1
   private winHealing = false
   private healCoverAt: V2 | null = null
@@ -219,6 +222,7 @@ export class Bot {
     const act: Omit<Action, "tick"> = {}
 
     if (this.recentHits.length && this.recentHits[0].t < obs.t - 5) this.recentHits = this.recentHits.filter((h) => h.t > obs.t - 5)
+    this.myPos = obs.self.pos as V3; this.nowT = obs.t
     this.updateTracks(obs)
     this.updateThreatCost(obs)
     this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
@@ -729,6 +733,15 @@ export class Bot {
           // give up on a roof pickup we can't reach in time (never stand at a wall jumping forever)
           if (this.climbId !== loot.takeId) { this.climbId = loot.takeId!; this.climbT = t }
           if (t - this.climbT > P.climbTimeout) this.badLoot.add(loot.takeId!)
+          // stuck on the ground at the wall (no progress): give up on this roof, and on everything else up there
+          if (P.climbStall > 0) {
+            if (me.grounded && Math.hypot(me.vel[0], me.vel[1]) < 1) { if (this.climbStillT < 0) this.climbStillT = t }
+            else this.climbStillT = -1
+            if (this.climbStillT >= 0 && t - this.climbStillT > P.climbStall) {
+              for (const [pid, pk] of this.pickups) if (pid === loot.takeId || dist2(pk.pos, loot.pos) < 30) this.badLoot.add(pid)
+              this.climbStillT = -1
+            }
+          }
           const c = this.climbTo(loot.pos, loot.climb, me, pos, t)
           move = c.move; boost = c.boost; climbJump = c.jump
         } else move = this.followTo(loot.pos, pos, t)
@@ -907,6 +920,7 @@ export class Bot {
         this.tracks.set(m.id, tr)
       }
       if (m.kind === "mech" && dist2(m.pos, obs.self.pos) < 150) tr.watchT += 0.1 // time we've had it in view nearby
+      if (P.passiveNear > 0) { const d = dist2(m.pos, obs.self.pos); if (!tr.approach || obs.t - tr.approach.t > 5) tr.approach = { t: obs.t, d0: d } }
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
@@ -1480,7 +1494,14 @@ export class Bot {
   private isPassive(id: number): boolean {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
-    return !!tr && tr.hitUsT < 0 && tr.watchT >= P.passiveAfter
+    if (!tr || tr.hitUsT >= 0 || tr.watchT < P.passiveAfter) return false
+    if (P.passiveNear > 0) {
+      // a bot that has walked up close, or is closing in on us, is a threat whether or not it has fired yet
+      const d = dist2(tr.pos, this.myPos)
+      if (d < P.passiveNear) return false
+      if (tr.approach != null && tr.approach.t > this.nowT - 5 && tr.approach.d0 - d > P.passiveClosing) return false
+    }
+    return true
   }
 
   /** Highest solid or ground surface at (x, y). */
