@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9g",
+  "name": "mr-v9.9h",
   "upgrades": [
     "armor",
     "plating",
@@ -196,5 +196,7 @@
   "dropZoneSlack": 25,
   "dropEdgeMargin": 20,
   "unstickOpen": true,
-  "unstickT": 1.5
+  "unstickT": 1.5,
+  "routeNearW": 2,
+  "routeNearR": 60
 }

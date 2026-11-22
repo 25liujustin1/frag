@@ -120,7 +120,7 @@ export class Bot {
   /** Dynamic route cost: ground that any recently seen enemy can see (within 160 m of us), refreshed each second. */
   private updateThreatCost(obs: Observation): void {
     const nav = this.nav
-    if (P.routeThreatW <= 0 || obs.t - this.threatCostT < 1) return
+    if ((P.routeThreatW <= 0 && P.routeNearW <= 0) || obs.t - this.threatCostT < 1) return
     this.threatCostT = obs.t
     for (const n of this.threatNodes) nav.threatCost[n] = 0
     this.threatNodes = []
@@ -132,15 +132,21 @@ export class Bot {
       const x = pos[0] + dx, y = pos[1] + dy, n0 = nav.nodeAt(x, y)
       if (n0 < 0 || !nav.walk[n0]) continue
       const z = nav.floor[r.cellOf(x, y)] + 4.5
-      let seen = false
-      for (const e of eyes) if (Math.hypot(e[0] - x, e[1] - y) < 230 && r.los(e[0], e[1], e[2], x, y, z, 1)) { seen = true; break }
-      if (!seen) continue
+      let seen = false, nearest = Infinity
+      for (const e of eyes) {
+        const de = Math.hypot(e[0] - x, e[1] - y)
+        if (de < nearest) nearest = de
+        if (!seen && de < 230 && r.los(e[0], e[1], e[2], x, y, z, 1)) seen = true
+      }
+      // cost: in an enemy's sight line, plus closeness to any known enemy (keep routes away from bots)
+      const cost = (seen ? P.routeThreatW : 0) + (nearest < P.routeNearR ? (P.routeNearW * (P.routeNearR - nearest)) / P.routeNearR : 0)
+      if (cost <= 0) continue
       const I0 = n0 % nav.nx, J0 = (n0 - I0) / nav.nx
       for (let j = -2; j < 2; j++) for (let i = -2; i < 2; i++) {
         const I = I0 + i, J = J0 + j
         if (I < 0 || J < 0 || I >= nav.nx || J >= nav.ny) continue
         const m = J * nav.nx + I
-        nav.threatCost[m] = P.routeThreatW
+        nav.threatCost[m] = cost
         this.threatNodes.push(m)
       }
     }
