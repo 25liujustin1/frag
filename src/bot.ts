@@ -60,6 +60,12 @@ export class Bot {
   private islandCheckT = -99
   private offMain = false
   private islandGoal: V2 | null = null
+  private islandDir: V2 | null = null
+  private islandDirT = -99
+  private islandFrom: V2 = [0, 0]
+  private islandK = 0
+  private islandClearZ = 0
+  private islandTried = new Set<number>()
   private hasLight = false
   private fleeReplanT = -99
   private gunOnly = true
@@ -747,41 +753,40 @@ export class Bot {
     }
 
     if (t < this.unstickUntil) move = this.unstickDir
-    // off the main walkable area (spawned in the sunken bowl or on a ledge the route map doesn't connect):
-    // head straight for the nearest main-area spot, jumping and jetting over whatever is in the way
+    // off the main walkable area (sunken bowl, rooftop pocket, ledge the route map doesn't connect):
+    // pick the direction with the lowest wall to clear, recharge, jet straight up above it, then go over.
+    // If we make no progress, mark that direction as tried and pick another.
     if (P.islandEscape) {
+      const nav = this.nav
       if (t - this.islandCheckT > 0.5) {
         this.islandCheckT = t
-        const nav = this.nav, need = nav.dynClear
+        const need = nav.dynClear
         nav.dynClear = 0
-        this.offMain = me.grounded && nav.nearestWalkable(pos[0], pos[1], 2) < 0
-        if (this.offMain) {
-          const n = nav.nearestWalkable(pos[0], pos[1], P.islandSearch)
-          this.islandGoal = n >= 0 ? [nav.nodeX(n), nav.nodeY(n)] : null
-        }
+        this.offMain = me.grounded ? nav.nearestWalkable(pos[0], pos[1], 2) < 0 : this.offMain
         nav.dynClear = need
+        if (!this.offMain) { this.islandTried.clear(); this.islandDir = null }
+        else if (me.grounded && (!this.islandDir || (t - this.islandDirT > P.islandRetry && dist2(pos, this.islandFrom) < 6))) {
+          if (this.islandDir) this.islandTried.add(this.islandK)
+          if (this.islandTried.size >= 16) this.islandTried.clear()
+          this.islandPick(pos)
+          this.islandDirT = t; this.islandFrom = [pos[0], pos[1]]
+        }
       }
-      if (this.islandGoal && (this.offMain || (!me.grounded && this.mode === "island"))) {
+      if (this.offMain && this.islandDir) {
         this.mode = "island"
-        move = dirTo(pos, this.islandGoal)
-        jump = me.grounded
-        boost = !me.grounded && me.energy > 3
+        const climbE = Math.min(me.max_energy * 0.95, (this.islandClearZ - pos[2]) * P.climbEnergyPerM + 15)
+        if (me.grounded) {
+          // wait for enough energy, then take off
+          move = me.energy >= climbE ? this.islandDir : [0, 0]
+          jump = me.energy >= climbE
+          boost = false
+        } else {
+          // rise straight up until above the wall, then go over it
+          move = pos[2] < this.islandClearZ ? [0, 0] : this.islandDir
+          boost = me.energy > 2
+        }
         this.stuckRefT = t
       }
-    }
-    // check six: while moving/retreating and not shooting, glance at the most likely unseen danger
-    if (P.checkSix && !fire[0] && !fire[1] && t - this.lastDmgT > 1 && ["retreat", "rotate", "grab", "collect", "reposition", "seek", "loot"].includes(this.mode)) {
-      if (t >= this.checkNextT) {
-        let bear: number | null = null, bt = -1
-        for (const tr of this.tracks.values()) {
-          if (tr.id >= 100 || this.isPassive(tr.id) || obs.mechs.some((m) => m.id === tr.id)) continue
-          if (t - tr.seenT < 10 && tr.seenT > bt) { bt = tr.seenT; bear = yawTo(pos, tr.pos) }
-        }
-        if (bear == null && this.soundContacts.length) bear = yawTo(pos, this.soundContacts[this.soundContacts.length - 1].pos)
-        if (bear != null && angDiff(bear, me.aim[0]) > 0.9) { this.checkAim = bear; this.checkUntil = t + P.checkDur }
-        this.checkNextT = t + P.checkEvery
-      }
-      if (t < this.checkUntil) aim = [this.checkAim, 0]
     }
     if (P.flankLook && t < this.flankUntil) { aim = [this.flankAim, 0]; fire[0] = false; fire[1] = false }
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
@@ -1386,6 +1391,33 @@ export class Bot {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
     return !!tr && tr.hitUsT < 0 && tr.watchT >= P.passiveAfter
+  }
+
+  /** Highest solid or ground surface at (x, y). */
+  private topAt(x: number, y: number): number {
+    const r = this.r, c = r.cellOf(x, y)
+    if (c < 0) return 1e9
+    return Math.max(r.ground[c], r.s1hi[c], r.s2hi[c])
+  }
+
+  /** Off the main area: choose the way out with the lowest wall (prefer toward the main area, skip tried ones). */
+  private islandPick(pos: V3): void {
+    const nav = this.nav
+    const n = nav.nearestWalkable(pos[0], pos[1], P.islandSearch)
+    const bm = n >= 0 ? Math.atan2(nav.nodeY(n) - pos[1], nav.nodeX(n) - pos[0]) : 0
+    let bk = 0, bs = Infinity, bTop = pos[2]
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2, cx = Math.cos(a), cy = Math.sin(a)
+      let top = -1e9
+      for (let d = 2; d <= 16; d++) top = Math.max(top, this.topAt(pos[0] + cx * d, pos[1] + cy * d))
+      const outN = nav.nearestWalkable(pos[0] + cx * 22, pos[1] + cy * 22, 4)
+      const s = Math.max(0, top - pos[2]) + (outN >= 0 ? 0 : 10) + angDiff(a, bm) * 4 + (this.islandTried.has(k) ? 50 : 0)
+      if (s < bs) { bs = s; bk = k; bTop = top }
+    }
+    const a = (bk / 16) * Math.PI * 2
+    this.islandK = bk
+    this.islandDir = [Math.cos(a), Math.sin(a)]
+    this.islandClearZ = Math.max(pos[2], bTop) + P.islandMargin
   }
 
   /** Cubes past 10 only add size; keep taking them only when the next upgrade offer is close. */
