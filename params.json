@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11b",
+  "name": "mr-v11c",
   "upgrades": [
     "armor",
     "plating",
@@ -258,7 +258,7 @@
   },
   "fleeAll": false,
   "fleeReplan": 2,
-  "edgeMode": false,
+  "edgeMode": true,
   "edgeFrac": 0.9,
   "edgeMapMargin": 25,
   "edgeArrive": 20,
@@ -269,5 +269,21 @@
   "lightAvoidR": 55,
   "lightAvoidW": 3,
   "islandEscape": true,
-  "islandSearch": 60
+  "islandSearch": 60,
+  "harass": true,
+  "hrIsoR": 60,
+  "hrIsoW": 1.0,
+  "hrWeakW": 1.0,
+  "hrBurst": 250,
+  "hrAttackMax": 4,
+  "hrApproachMax": 12,
+  "hrForget": 15,
+  "hrDisMin": 1.5,
+  "hrDisMax": 6,
+  "hrRecoverHp": 0.85,
+  "hrRecoverMax": 12,
+  "hrRepoMax": 10,
+  "hrArrive": 6,
+  "hrLead": 8,
+  "hrDefendR": 60
 }
