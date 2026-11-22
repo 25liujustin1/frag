@@ -52,6 +52,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private hideUntil = -1
+  private otherEyes: V3[] = []
   private reserve = 25
   private threatCostT = -99
   private threatNodes: number[] = []
@@ -164,6 +166,7 @@ export class Bot {
 
     this.updateTracks(obs)
     this.updateThreatCost(obs)
+    this.otherEyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
     {
       // energy reserve for escapes: grows with nearby threats and missing HP; optional boosts only spend above it
       const near = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && dist2(tr.pos, obs.self.pos) < 150).length
@@ -390,7 +393,12 @@ export class Bot {
     if (this.retreating && me.hp > me.max_hp * P.reengageHpFrac && odds > 1) this.retreating = false
     if (!pushing && (lowHp || odds < P.retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
     // reset after a kill: heal up in cover before the next hunter arrives
-    if (obs.events.some((e) => e.type === "kill")) this.resetUntil = t + P.resetMax
+    if (obs.events.some((e) => e.type === "kill")) {
+      this.resetUntil = t + P.resetMax
+      const others = [...this.tracks.values()].some((tr) => tr.id < 100 && t - tr.seenT < 10 && dist2(tr.pos, pos) < 200 && tr.hp > 0)
+      if (P.postKillHide && me.hp < me.max_hp * P.pkHpFrac && others) this.hideUntil = t + P.pkMaxT
+    }
+    const healing = P.postKillHide && t < this.hideUntil && me.hp < me.max_hp * P.pkExitHp && !outside
 
     let move: V2 = [0, 0]
     let boost = false
@@ -486,6 +494,15 @@ export class Bot {
         if (t > this.burstT) { this.bursting = this.rng.next() < P.burstChance; this.burstT = t + this.rng.range(0.6, 1.4) }
         boost = this.bursting
       }
+    } else if (healing && !(underFire && target && tgtDist < 40)) {
+      this.mode = "heal"
+      const threats = [...this.tracks.values()].filter((tr) => tr.id < 100 && t - tr.seenT < 10).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8] as V3)
+      const cover = threats.length ? this.findCover(pos, threats, obs) : null
+      if (cover) move = this.followTo(cover, pos, t)
+      else if (threats.length >= 2) move = this.gapDir(pos, threats)
+      else if (threats.length) move = this.combatDir(pos, threats[0], 9999, 9999, obs, false)
+      else move = [0, 0]
+      boost = underFire && me.energy > 10
     } else if (t < this.resetUntil && me.hp < me.max_hp * P.resetHpFrac && !outside && enemies.length === 0) {
       // reset: pick up cubes close by, otherwise sit in a sheltered spot and heal
       this.mode = "reset"
@@ -548,6 +565,8 @@ export class Bot {
         move = [move[0] * 0.6 + Math.cos(perp) * j * 0.8, move[1] * 0.6 + Math.sin(perp) * j * 0.8]
       }
     }
+    // healing after a kill: hold fire unless shot (dealing damage restarts the 5 s regen delay)
+    if (this.mode === "heal" && !underFire) { fire[0] = false; fire[1] = false }
     // never charge the laser while escaping (it halves our speed); the gun keeps firing
     if (this.escaping && iLaser >= 0) fire[iLaser] = false
     // opportunistic take of any useful pickup underfoot
@@ -1033,6 +1052,11 @@ export class Bot {
         const px = pos[0] + cx * 8, py = pos[1] + cy * 8, pz = this.r.groundAt(px, py)
         const seen = this.r.los(tp[0], tp[1], eyeZ, px, py, pz + 4.5, 1) || this.r.los(tp[0], tp[1], eyeZ, px, py, pz + 8.5, 1)
         s += ready ? (seen ? P.peekW : -P.peekW) : (seen ? -P.duckW : P.duckW)
+        if (P.peekDiscipline && this.otherEyes.length) {
+          let others = 0
+          for (const e of this.otherEyes) if (Math.hypot(e[0] - tp[0], e[1] - tp[1]) > 8 && (this.r.los(e[0], e[1], e[2], px, py, pz + 4.5, 1) || this.r.los(e[0], e[1], e[2], px, py, pz + 8.5, 1))) others++
+          s -= others * P.peekMultiW
+        }
         // stay close to cover: prefer spots that have a hidden spot one more step out
         if (seen) {
           const qx = pos[0] + cx * 16, qy = pos[1] + cy * 16, qz = this.r.groundAt(qx, qy)

@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9b",
+  "name": "mr-v9.9c",
   "upgrades": [
     "armor",
     "plating",
@@ -177,7 +177,13 @@
   "separateW": 2,
   "routeExpW": 1,
   "routeThreatW": 2,
-  "dynReserve": true,
+  "dynReserve": false,
   "reservePerThreat": 12,
-  "reserveLowHp": 40
+  "reserveLowHp": 40,
+  "postKillHide": true,
+  "pkHpFrac": 0.6,
+  "pkMaxT": 15,
+  "pkExitHp": 0.85,
+  "peekDiscipline": true,
+  "peekMultiW": 1.5
 }
