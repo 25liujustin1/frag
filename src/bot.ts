@@ -267,7 +267,14 @@ export class Bot {
     const best = this.bestWeapon(slots)
 
     // ---- target selection
-    const muzzle: V3 = [pos[0], pos[1], pos[2] + me.stats.muzzle_height]
+    // real muzzle (measured from 1,422 laser beams in recordings): radius*size + 0.4 m ahead along the aim, at
+    // muzzle_height*size, where size = 1 + 5% per cube. Using a fixed 7 m made every shot fly high once we had cubes.
+    let muzzle: V3 = [pos[0], pos[1], pos[2] + me.stats.muzzle_height]
+    if (P.muzzleFix) {
+      const cm = this.hello.config.mech as any, sz = 1 + ((this.hello.config as any).cubes?.size_per_cube ?? 0.05) * me.cubes
+      const fwd = (cm.radius ?? 2.5) * sz + 0.4, cp = Math.cos(me.aim[1])
+      muzzle = [pos[0] + Math.cos(me.aim[0]) * cp * fwd, pos[1] + Math.sin(me.aim[0]) * cp * fwd, pos[2] + (cm.muzzle_height ?? 7) * sz + Math.sin(me.aim[1]) * fwd]
+    }
     const eye: V3 = [pos[0], pos[1], pos[2] + me.stats.eye_height]
     const enemies = obs.mechs.filter((m) => m.kind === "mech")
     const npcsAttacking = obs.mechs.filter((m) => m.kind === "npc" && (this.tracks.get(m.id)?.hitUsT ?? -99) > t - 4 && dist2(m.pos, pos) < 90)
