@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.6c",
+  "name": "mr-v9.7b",
   "upgrades": [
     "armor",
     "plating",
@@ -154,7 +154,7 @@
   "survEscapeHp": 0.4,
   "survZoneInnerFrac": 0.3,
   "survAfterT": 99999,
-  "survAfterKills": 99,
+  "survAfterKills": 3,
   "grabThreatR": 120,
   "grabMaxNear": 99,
   "grabCloseOk": 15,
@@ -169,5 +169,9 @@
   "campW": 1.5,
   "sizeAware": true,
   "airBoostGate": true,
-  "unstuckJetH": 3
+  "unstuckJetH": 3,
+  "swivel": false,
+  "swivelAmp": 1.6,
+  "swivelRate": 1.6,
+  "swivelHoldRate": 2.5
 }

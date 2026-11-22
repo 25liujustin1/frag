@@ -505,8 +505,8 @@ export class Bot {
       else if (t < 1.8) { this.sweep = wrap(this.sweep + 0.4); aim = [this.sweep, 0] } // look around at spawn for loot
       else if (t - this.heardT < 3) aim = [this.heardBearing, 0]
       else if (recent) aim = [yawTo(pos, recent.pos), 0]
-      else if (this.mode === "hold" && this.hold && Math.hypot(move[0], move[1]) < 0.1) aim = [this.hold.face + 0.6 * Math.sin(t * 0.7), 0]
-      else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]) + (t < P.searchStopT ? P.scanAmp * Math.sin(t * 2.2) : 0), 0]
+      else if (this.mode === "hold" && this.hold && Math.hypot(move[0], move[1]) < 0.1) { if (P.swivel) { this.sweep = wrap(this.sweep + P.swivelHoldRate * 0.1); aim = [this.sweep, 0] } else aim = [this.hold.face + 0.6 * Math.sin(t * 0.7), 0] }
+      else if (Math.hypot(move[0], move[1]) > 0.1) aim = [Math.atan2(move[1], move[0]) + (P.swivel ? P.swivelAmp * Math.sin(t * P.swivelRate) : t < P.searchStopT ? P.scanAmp * Math.sin(t * 2.2) : 0), 0]
       else { this.sweep = wrap(this.sweep + 0.12); aim = [this.sweep, 0] }
     } else this.sweep = aim[0]
 
