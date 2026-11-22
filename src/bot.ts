@@ -52,6 +52,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private gunOnly = true
   private hitBy = new Map<number, number>()
   private targetSinceT = 0
   private lastShotT = 0
@@ -400,8 +401,10 @@ export class Bot {
 
     // crate shooting when calm (cubes + loot)
     let crateGoal: V3 | null = null
-    const needWeapon = iLaser < 0 && t < P.searchStopT
-    if (!target && t < P.crateStopT && iGun >= 0 && !underFire) {
+    const gunOnly = slots.every((w) => !w || w.kind === "gun")
+    this.gunOnly = gunOnly
+    const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
+    if (!target && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
@@ -562,7 +565,7 @@ export class Bot {
       // reset: pick up cubes close by, otherwise sit in a sheltered spot and heal
       this.mode = "reset"
       let cube: V3 | null = null, cd = P.resetCubeRange
-      for (const c of this.cubeMem.values()) { const d = dist2(c, pos); if (d < cd && this.reachable(c)) { cd = d; cube = c } }
+      if (this.wantCubes(me.cubes)) for (const c of this.cubeMem.values()) { const d = dist2(c, pos); if (d < cd && this.reachable(c)) { cd = d; cube = c } }
       if (cube) move = this.followTo(cube, pos, t)
       else {
         const h = this.holdSpot(obs, pos)
@@ -889,7 +892,7 @@ export class Bot {
       }
       return true
     }
-    for (const c of this.cubeMem.values()) {
+    if (this.wantCubes(obs.self.cubes)) for (const c of this.cubeMem.values()) {
       const d = dist2(c, pos)
       if (d > P.grabRange || !this.reachable(c) || !this.inZoneSoon(obs, c) || !safe(c, d)) continue
       let n = 0
@@ -942,7 +945,7 @@ export class Bot {
     const pos = obs.self.pos as V3
     const calm = !obs.mechs.some((m) => m.kind === "mech")
     // cubes (from kills, crates): worth a trip when nobody is in sight; clusters first
-    if (calm && obs.t < P.cubeStopT && !(zoneGoal && dist2(zoneGoal, pos) / obs.self.stats.walk_speed > (obs.zone.shrink_end - obs.t) * 0.6)) {
+    if (calm && this.wantCubes(obs.self.cubes) && obs.t < P.cubeStopT && !(zoneGoal && dist2(zoneGoal, pos) / obs.self.stats.walk_speed > (obs.zone.shrink_end - obs.t) * 0.6)) {
       let bc: V3 | null = null, bcs = -Infinity
       for (const c of this.cubeMem.values()) {
         const d = dist2(c, pos)
@@ -954,7 +957,7 @@ export class Bot {
       }
       if (bc) return { pos: bc }
     }
-    if (obs.t > P.lootStopT) return null
+    if (obs.t > (this.gunOnly ? Math.max(P.lootStopT, P.gunOnlyStopT) : P.lootStopT)) return null
     // don't wander far if the zone needs us
     const z = obs.zone
     const tLeft = z.shrink_end - obs.t
@@ -971,7 +974,7 @@ export class Bot {
       let climb: V2 | undefined
       if (this.badLoot.has(id)) continue
       if (!this.reachable(p.pos)) {
-        if (!P.climb || obs.t > P.climbStopT) continue
+        if (!P.climb || obs.t > (this.gunOnly ? Math.max(P.climbStopT, P.gunOnlyStopT) : P.climbStopT)) continue
         const b = this.roofBase(p.pos, obs.self)
         if (!b) continue
         climb = b
@@ -979,7 +982,7 @@ export class Bot {
       const s = take.gain * 60 - d - (climb ? P.climbPenalty : 0)
       if (s > bs) { bs = s; best = { pos: p.pos, takeId: id, drop: take.drop, climb } }
     }
-    for (const c of obs.cubes) {
+    if (this.wantCubes(obs.self.cubes)) for (const c of obs.cubes) {
       const d = dist2(c.pos, pos)
       if (d > 80 || !this.inZoneSoon(obs, c.pos) || !this.reachable(c.pos)) continue
       const s = 40 - d
@@ -1245,6 +1248,14 @@ export class Bot {
     if (!P.passiveTrack) return false
     const tr = this.tracks.get(id)
     return !!tr && tr.hitUsT < 0 && tr.watchT >= P.passiveAfter
+  }
+
+  /** Cubes past 10 only add size; keep taking them only when the next upgrade offer is close. */
+  private wantCubes(n: number): boolean {
+    if (!P.cubeCap || n < 10) return true
+    let th = 10, step = 5
+    while (th <= n) { th += step; step++ } // offers at 10, 15, 21, 28, ...
+    return th - n <= P.cubeNearUp
   }
 
   /** clearance needed to move: the starting radius check (2.6) grows with our size */
