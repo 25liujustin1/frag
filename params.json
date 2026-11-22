@@ -1,5 +1,5 @@
 {
-  "name": "mr-final-tc2",
+  "name": "mr-final-tc3",
   "upgrades": [
     "armor",
     "plating",
@@ -308,7 +308,7 @@
   "btClosing": 3,
   "btCloseR": 180,
   "btNear": 40,
-  "antiLight": true,
+  "antiLight": false,
   "antiLightR": 59,
   "antiLightW": 6,
   "antiLightMem": 6
