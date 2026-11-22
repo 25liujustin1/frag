@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11h",
+  "name": "mr-v11i",
   "upgrades": [
     "armor",
     "plating",
@@ -258,13 +258,13 @@
   },
   "fleeAll": false,
   "fleeReplan": 2,
-  "edgeMode": false,
+  "edgeMode": true,
   "edgeFrac": 0.9,
   "edgeMapMargin": 25,
   "edgeArrive": 20,
   "edgeMaxT": 100,
   "edgeHoldMinR": 140,
-  "edgeLootR": 60,
+  "edgeLootR": 120,
   "lightAvoid": false,
   "lightAvoidR": 55,
   "lightAvoidW": 3,
@@ -292,5 +292,8 @@
   "healWait": false,
   "healBelow": 0.6,
   "healUntil": 0.85,
-  "healSafeR": 130
+  "healSafeR": 130,
+  "vultureW": 0,
+  "vultureWin": 4,
+  "vultureFfa": false
 }

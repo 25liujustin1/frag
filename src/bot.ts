@@ -15,7 +15,7 @@ const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning",
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
-type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number }
+type Track = { id: number; pos: V3; vel: V3; aim: V2; hp: number; maxHp: number; cubes: number; weapons: string[]; charging: boolean; seenT: number; hitUsT: number; weHitT: number; watchT: number; otherDmgT?: number }
 
 export class Bot {
   name: string = P.name
@@ -317,7 +317,7 @@ export class Bot {
     if (this.ffa && !fighting.length) {
       // free-for-all: don't start fights. Only take free kills (badly hurt targets), defend our space
       // (very close mechs), or fight it out in the endgame.
-      pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
+      pool = pool.filter((m) => m.kind === "npc" || (P.vultureFfa && (this.tracks.get(m.id)?.otherDmgT ?? -99) > t - P.vultureWin) || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.ffaWeakFrac || dist2(m.pos, pos) < P.ffaCloseRange || obs.alive <= P.ffaEndgameAlive)
     } else if (this.survNow && !this.ffa && !fighting.length) {
       // survivor (practice experiment): never start a fight; only fight back, or finish a badly hurt mech
       pool = pool.filter((m) => m.kind === "npc" || (m.hp ?? 1400) < (m.max_hp ?? 1400) * P.survWeakFrac || dist2(m.pos, pos) < P.survCloseRange)
@@ -350,6 +350,7 @@ export class Bot {
       }
       if (P.closeFirst && m.kind === "mech" && d < P.closeR) s -= P.closePri // deal with the close one first
       if (m.kind === "npc") s += 2
+      if (P.vultureW && tr && (tr.otherDmgT ?? -99) > t - P.vultureWin) s -= P.vultureW // third-party: it's busy with someone else
       if (P.counterW && m.kind === "mech") {
         // weapon triangle: laser > mortar > lightning > laser. Prefer targets we counter, avoid ones that counter us.
         const mine = slots.filter(Boolean).map((w) => w!.kind), theirs = m.weapons ?? []
@@ -865,6 +866,8 @@ export class Bot {
       }
       if (m.kind === "mech" && dist2(m.pos, obs.self.pos) < 150) tr.watchT += 0.1 // time we've had it in view nearby
       tr.pos = m.pos as V3; tr.vel = m.vel as V3; tr.aim = m.aim as V2; tr.seenT = obs.t
+      // third-party marker: it lost HP and it wasn't us (someone else is fighting it)
+      if (m.kind === "mech" && m.hp != null && m.hp < tr.hp - 1 && obs.t - tr.weHitT > 0.4) tr.otherDmgT = obs.t
       tr.hp = m.hp ?? tr.hp; tr.maxHp = m.max_hp ?? tr.maxHp; tr.cubes = m.cubes ?? tr.cubes
       tr.weapons = m.weapons ?? tr.weapons; tr.charging = !!m.charging
     }
