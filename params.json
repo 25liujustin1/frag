@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.6b",
+  "name": "mr-v9.6c",
   "upgrades": [
     "armor",
     "plating",
@@ -167,7 +167,7 @@
   "spotRearW": 1,
   "campAfter": 25,
   "campW": 1.5,
-  "sizeAware": false,
-  "airBoostGate": false,
+  "sizeAware": true,
+  "airBoostGate": true,
   "unstuckJetH": 3
 }
