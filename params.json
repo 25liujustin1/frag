@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9a",
+  "name": "mr-v9.9b",
   "upgrades": [
     "armor",
     "plating",
@@ -176,5 +176,8 @@
   "swivelHoldRate": 2.5,
   "separateW": 2,
   "routeExpW": 1,
-  "routeThreatW": 2
+  "routeThreatW": 2,
+  "dynReserve": true,
+  "reservePerThreat": 12,
+  "reserveLowHp": 40
 }

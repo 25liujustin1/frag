@@ -52,6 +52,7 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private reserve = 25
   private threatCostT = -99
   private threatNodes: number[] = []
   private myRad = 2.5
@@ -163,6 +164,12 @@ export class Bot {
 
     this.updateTracks(obs)
     this.updateThreatCost(obs)
+    {
+      // energy reserve for escapes: grows with nearby threats and missing HP; optional boosts only spend above it
+      const near = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < 8 && dist2(tr.pos, obs.self.pos) < 150).length
+      const hpGap = 1 - obs.self.hp / Math.max(1, obs.self.max_hp)
+      this.reserve = P.dynReserve ? Math.min(85, P.energyReserve + P.reservePerThreat * near + P.reserveLowHp * hpGap) : P.energyReserve
+    }
     {
       const cfgc = this.hello.config
       this.myRad = cfgc.mech.radius * (1 + (cfgc.cubes.size_per_cube ?? 0.05) * obs.self.cubes)
@@ -421,7 +428,7 @@ export class Bot {
         act.take = grab.takeId
         if (grab.drop != null) act.drop = grab.drop
       }
-      boost = gd > 25 && me.energy > P.energyReserve + 20
+      boost = gd > 25 && me.energy > this.reserve + 20
     } else if (this.retreating && (target || underFire)) {
       this.mode = "retreat"
       // hide from every enemy seen recently, not just the ones in view this tick
@@ -472,10 +479,10 @@ export class Bot {
         }
       }
       if (this.ambushing) { this.mode = "ambush"; move = [0, 0] } // hold still (silent), pre-aimed, laser charging
-      if (tgtDist < band[0] * 0.6 && me.energy > P.energyReserve + 20) boost = true
-      if (pushing && tgtDist > band[1] && me.energy > P.energyReserve) boost = true // chase
+      if (tgtDist < band[0] * 0.6 && me.energy > this.reserve + 20) boost = true
+      if (pushing && tgtDist > band[1] && me.energy > this.reserve) boost = true // chase
       // short boost bursts while dodging, like the house bots (not while charging the laser)
-      if (!boost && P.boostBursts && me.energy > P.energyReserve + 30 && !(laserCharging(slots))) {
+      if (!boost && P.boostBursts && me.energy > this.reserve + 30 && !(laserCharging(slots))) {
         if (t > this.burstT) { this.bursting = this.rng.next() < P.burstChance; this.burstT = t + this.rng.range(0.6, 1.4) }
         boost = this.bursting
       }
@@ -511,7 +518,7 @@ export class Bot {
         this.mode = "drop"
         const dd = dist2(dropAt, pos)
         move = dd > P.dropStand ? this.followTo(dropAt, pos, t) : [0, 0]
-        boost = dd > 40 && me.energy > P.energyReserve + 20
+        boost = dd > 40 && me.energy > this.reserve + 20
       } else if (loot && !outside) {
         this.mode = loot.takeId != null ? (loot.climb ? "climb" : "loot") : loot.explore ? "explore" : "collect"
         if (loot.climb) {
