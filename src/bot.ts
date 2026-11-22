@@ -52,6 +52,8 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private unstickUntil = -1
+  private unstickDir: V2 = [0, 0]
   private hideUntil = -1
   private otherEyes: V3[] = []
   private reserve = 25
@@ -531,7 +533,7 @@ export class Bot {
         boost = !me.grounded && pos[2] - this.scoutZ < P.scoutHeight && me.energy > 20
         this.sweep = wrap(this.sweep + 0.4)
         aim = [this.sweep, -0.2]
-      } else if (dropAt && !outside) {
+      } else if (dropAt && !outside && zoneSlack > P.dropZoneSlack && this.zoneEdgeDist > P.dropEdgeMargin) {
         // supply drop: full HP + full energy + 3 cubes for standing in the ring alone for 4 s
         this.mode = "drop"
         const dd = dist2(dropAt, pos)
@@ -610,6 +612,15 @@ export class Bot {
           }
           this.jumpUntil = t // stop jumping at it; walk around instead
         }
+        // stuck in the same place again (often: grown too wide for a gap): back out toward open space
+        if (P.unstickOpen && this.stuckAt && dist2(this.stuckAt, pos) < 6 && t - this.stuckAtT < 10) {
+          let bestDir: V2 = [0, 0], bc = -1
+          for (let k = 0; k < 16; k++) {
+            const a = (k / 16) * Math.PI * 2, c = this.r.cellOf(pos[0] + Math.cos(a) * 3, pos[1] + Math.sin(a) * 3)
+            if (c >= 0 && this.nav.clear[c] > bc) { bc = this.nav.clear[c]; bestDir = [Math.cos(a), Math.sin(a)] }
+          }
+          this.unstickDir = bestDir; this.unstickUntil = t + P.unstickT; this.pathT = -99
+        }
         this.stuckAt = [pos[0], pos[1]]
         this.stuckAtT = t
       }
@@ -623,6 +634,7 @@ export class Bot {
       if (!me.grounded && me.energy > 8) boost = true
     }
 
+    if (t < this.unstickUntil) move = this.unstickDir
     // safety net: never send NaN/Infinity (a bad setting or edge case must not freeze the mech)
     if (!Number.isFinite(move[0]) || !Number.isFinite(move[1])) move = [0, 0]
     if (!Number.isFinite(aim[0]) || !Number.isFinite(aim[1])) aim = [me.aim[0], 0]
@@ -1157,11 +1169,21 @@ export class Bot {
   /** Follow an A* path toward a world point; returns a unit move vector. */
   private followTo(goal: number[], pos: V3, t: number): V2 {
     const nav = this.nav
-    const gn = nav.nearestWalkable(goal[0], goal[1], 12)
+    const need = nav.dynClear
+    let gn = nav.nearestWalkable(goal[0], goal[1], 12)
+    // grown too big for the map here: plan at normal size and squeeze (walls slide us along)
+    if (gn < 0 && need > 3) { nav.dynClear = 0; gn = nav.nearestWalkable(goal[0], goal[1], 12); nav.dynClear = need }
     if (gn < 0) return dirTo(pos, goal)
     if (gn !== this.pathGoalNode || t - this.pathT > 2.5 || this.pathIdx >= this.path.length) {
-      const sn = nav.nearestWalkable(pos[0], pos[1], 6)
-      const res = sn >= 0 ? nav.astar(sn, gn, this.pathPartial ? 60000 : 20000) : null
+      let sn = nav.nearestWalkable(pos[0], pos[1], 6)
+      let res = sn >= 0 ? nav.astar(sn, gn, this.pathPartial ? 60000 : 20000) : null
+      if ((!res || !res.complete) && need > 3 && P.squeezeFallback) {
+        nav.dynClear = 0
+        sn = nav.nearestWalkable(pos[0], pos[1], 6)
+        const r2 = sn >= 0 ? nav.astar(sn, gn, 20000) : null
+        nav.dynClear = need
+        if (r2 && (r2.complete || !res)) res = r2
+      }
       this.path = res ? res.path : []
       this.pathPartial = !res || !res.complete
       this.pathIdx = 0

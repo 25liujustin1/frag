@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.9f",
+  "name": "mr-v9.9g",
   "upgrades": [
     "armor",
     "plating",
@@ -60,10 +60,10 @@
   "crateShootRange": 120,
   "crateSeekRange": 200,
   "scanAmp": 1,
-  "retreatHpFrac": 0.45,
-  "retreatOdds": 0.8,
-  "reengageHpFrac": 0.7,
-  "engageRange": 260,
+  "retreatHpFrac": 0.25,
+  "retreatOdds": 0.5,
+  "reengageHpFrac": 0.5,
+  "engageRange": 290,
   "jinkMin": 0.25,
   "jinkMax": 0.6,
   "energyReserve": 25,
@@ -123,7 +123,7 @@
   "grabQuiet": 2.5,
   "grabMinHp": 0.35,
   "grabRange": 80,
-  "grabSafe": 45,
+  "grabSafe": 25,
   "grabRatio": 0.8,
   "grabCubeV": 30,
   "grabWeaponV": 40,
@@ -186,10 +186,15 @@
   "pkExitHp": 0.85,
   "peekDiscipline": false,
   "peekMultiW": 1.5,
-  "seek": true,
+  "seek": false,
   "seekMinHp": 0.7,
   "seekMem": 30,
   "seekCrowdW": 60,
   "seekCenterR": 40,
-  "seekZoneSlack": 20
+  "seekZoneSlack": 20,
+  "squeezeFallback": true,
+  "dropZoneSlack": 25,
+  "dropEdgeMargin": 20,
+  "unstickOpen": true,
+  "unstickT": 1.5
 }
