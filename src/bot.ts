@@ -10,6 +10,8 @@ import { Nav } from "./map/nav.ts"
 import { aimAt, lead, mortarSolve } from "./aim.ts"
 import { angDiff, clamp, dist2, dist3, log, Rng, wrap, yawTo, type V2, type V3 } from "./util.ts"
 
+const LOWER_BETTER = new Set(["cooldown", "charge", "boost_drain", "jet_drain", "reload", "hearing", "regen_delay"])
+const COUNTERS: Record<string, string> = { laser: "mortar", mortar: "lightning", lightning: "laser" }
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const P = { ...JSON.parse(readFileSync(ROOT + "params.json", "utf8")), ...JSON.parse(process.env.BOT_PARAMS ?? "{}") }
 
@@ -214,7 +216,7 @@ export class Bot {
         if (e.type === "took") this.pickups.delete(e.id)
       }
     }
-    if (obs.offer) act.pick = this.pickUpgrade(obs.offer.choices.map((c) => c.id))
+    if (obs.offer) act.pick = this.pickUpgrade(obs.offer.choices.map((c) => c.id), me.weapons)
     // ---- which game is this? In practice the house squad never kills itself, so before the zone can kill
     // anyone (~125 s) every death is ours. A mech dying that we didn't kill means a free-for-all (finals).
     for (const e of obs.events) if (e.type === "kill") this.myKills++
@@ -293,6 +295,13 @@ export class Bot {
         if (m.id === this.curTarget) s -= P.targetStick // finish what we started
       }
       if (m.kind === "npc") s += 2
+      if (P.counterW && m.kind === "mech") {
+        // weapon triangle: laser > mortar > lightning > laser. Prefer targets we counter, avoid ones that counter us.
+        const mine = slots.filter(Boolean).map((w) => w!.kind), theirs = m.weapons ?? []
+        const weBeat = mine.some((k) => theirs.includes(COUNTERS[k] ?? "")), theyBeat = theirs.some((k) => mine.includes(COUNTERS[k] ?? ""))
+        if (weBeat && !theyBeat) s -= P.counterW
+        else if (theyBeat && !weBeat) s += P.counterW
+      }
       if (s < bestScore) { bestScore = s; target = m }
     }
     if (target && target.id !== this.curTarget) this.targetSinceT = t
@@ -421,14 +430,17 @@ export class Bot {
     // ---- movement
     const zoneGoal = this.zoneGoal(obs)
     const odds = target && target.kind === "mech" ? this.fightOdds(me, slots, target, enemies, pos) : 9
-    const lowHp = me.hp < me.max_hp * P.retreatHpFrac
+    // free-for-all (qualifying/final): survival first. Retreat earlier, come back healthier, flee sooner.
+    const ffaSafe = this.ffa && P.ffaSurvive && obs.alive > P.ffaEndgameAlive
+    const retreatOdds = ffaSafe ? P.ffaRetreatOdds : P.retreatOdds
+    const lowHp = me.hp < me.max_hp * (ffaSafe ? P.ffaRetreatHp : P.retreatHpFrac)
     // push: the target is nearly dead and nobody else is shooting at us → commit to the kill
     const otherShooters = enemies.filter((m) => m.id !== target?.id && engaged(m.id)).length
     const pushing = !!target && target.kind === "mech" && P.push && otherShooters === 0 && me.hp > me.max_hp * P.pushMinSelfHp &&
       ((target.hp ?? 1e9) < (target.max_hp ?? 1400) * P.pushHpFrac || (target.hp ?? 1e9) < P.pushHp)
     if (pushing) this.retreating = false
-    if (this.retreating && me.hp > me.max_hp * P.reengageHpFrac && odds > 1) this.retreating = false
-    if (!pushing && (lowHp || odds < P.retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
+    if (this.retreating && me.hp > me.max_hp * (ffaSafe ? P.ffaReengageHp : P.reengageHpFrac) && odds > 1) this.retreating = false
+    if (!pushing && (lowHp || odds < retreatOdds) && (underFire || (target && tgtDist < 150))) this.retreating = true
     // reset after a kill: heal up in cover before the next hunter arrives
     if (obs.events.some((e) => e.type === "kill")) {
       this.resetUntil = t + P.resetMax
@@ -450,7 +462,7 @@ export class Bot {
     // lose-the-tail state: start when low and chased; end when healed (or the timer runs out)
     const hostiles = [...this.tracks.values()].filter((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < 5)
     if (hostiles.some((tr) => t - tr.seenT < 0.5)) this.lastHostileT = t
-    if (P.fleeTail && !this.fleeing && me.hp < me.max_hp * P.fleeHp && hostiles.some((tr) => dist2(tr.pos, pos) < 100)) {
+    if (P.fleeTail && !this.fleeing && me.hp < me.max_hp * (ffaSafe ? P.ffaFleeHp : P.fleeHp) && hostiles.some((tr) => dist2(tr.pos, pos) < 100)) {
       this.fleeing = true; this.fleeT = t; this.fleeDest = this.fleeDestination(obs, pos, hostiles)
     }
     if (this.fleeing && (me.hp >= me.max_hp * P.fleeExitHp || t - this.fleeT > P.fleeMaxT)) { this.fleeing = false; this.fleeDest = null }
@@ -760,7 +772,47 @@ export class Bot {
     return best
   }
 
-  private pickUpgrade(ids: string[]): number {
+  /** Value of an upgrade from its real effects in hello.config.upgrades (survival-weighted, see params.upW). */
+  private upgradeValue(id: string, slots: (WeaponObs | null)[]): number | null {
+    const def = (this.hello.config.upgrades ?? []).find((u: any) => u.id === id) as any
+    if (!def || !Array.isArray(def.effects)) return null
+    const held = slots.filter(Boolean).map((w) => w!.kind)
+    const main = this.bestWeapon(slots)
+    let v = 0
+    for (const e of def.effects) {
+      const path: string = e.path ?? ""
+      const parts = path.split(".")
+      const stat = parts[parts.length - 1]
+      const lower = LOWER_BETTER.has(stat) || (parts[0] === "weapons" && stat === "energy")
+      let base: number | undefined
+      if (parts[0] === "mech") base = (this.hello.config.mech as any)?.[stat]
+      else if (parts[0] === "weapons") base = (this.hello.config.weapons as any)?.[parts[1]]?.[stat]
+      if (stat === "near_range_bonus") base = (this.hello.config.vision as any)?.near_range ?? 45
+      if (stat === "vision_bonus") base = (this.hello.config.vision as any)?.range ?? 200
+      let rel = 0
+      if (typeof e.mul === "number" && e.mul > 0) rel = lower ? 1 / e.mul - 1 : e.mul - 1
+      else if (typeof e.add === "number") rel = (lower ? -e.add : e.add) / (base && Math.abs(base) > 1e-9 ? Math.abs(base) : 1)
+      const key = parts[0] === "weapons" ? `weapons.${stat}` : path
+      let w = P.upW?.[key] ?? P.upW?.default ?? 0.05
+      if (parts[0] === "weapons") {
+        const kind = parts[1]
+        if (!held.includes(kind)) w = 0
+        else if (kind !== main) w *= P.upOffMain ?? 0.6
+      }
+      v += w * rel
+    }
+    return v
+  }
+
+  private pickUpgrade(ids: string[], slots: (WeaponObs | null)[] = []): number {
+    if (P.dynUpgrades) {
+      let bi = -1, bv = -Infinity
+      ids.forEach((id, i) => {
+        const v = this.upgradeValue(id, slots)
+        if (v != null && v > bv) { bv = v; bi = i }
+      })
+      if (bi >= 0) return bi
+    }
     let bi = 0, br = Infinity
     ids.forEach((id, i) => {
       const r = P.upgrades.indexOf(id)
