@@ -1,5 +1,5 @@
 {
-  "name": "mr-v9.2",
+  "name": "mr-v9.3",
   "upgrades": [
     "armor",
     "plating",
@@ -144,5 +144,8 @@
   "dropEarly": 8,
   "dropContestMax": 2.5,
   "dropSafe": 80,
-  "dropStand": 4
+  "dropStand": 4,
+  "grabThreatR": 120,
+  "grabMaxNear": 99,
+  "grabCloseOk": 15
 }

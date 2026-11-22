@@ -617,7 +617,11 @@ export class Bot {
    */
   private grabGoal(obs: Observation, slots: (WeaponObs | null)[], pos: V3, enemies: ActorObs[]): { pos: V3; takeId?: number; drop?: number } | null {
     let best: { pos: V3; takeId?: number; drop?: number } | null = null, bs = 0
+    // several enemies closing in: only loot that's right next to us
+    const nearUs = enemies.filter((e) => e.kind === "mech" && dist2(e.pos, pos) < P.grabThreatR).length
+    const maxD = nearUs > P.grabMaxNear ? P.grabCloseOk : P.grabRange
     const safe = (p: number[], d: number) => {
+      if (d > maxD) return false
       for (const e of enemies) {
         const de = dist2(e.pos, p)
         if (de < P.grabSafe || de < d * P.grabRatio) return false
@@ -880,10 +884,14 @@ export class Bot {
     const z = obs.zone
     const eyeZ = tp[2] + 8
     let best: V2 = [0, 0], bs = -Infinity
+    let maxFree = 0, maxFreeDir: V2 = [0, 0]
     for (let k = 0; k < 16; k++) {
       const a = (k / 16) * Math.PI * 2
       const cx = Math.cos(a), cy = Math.sin(a)
-      if (!this.roomAlong(pos, cx, cy, 9)) continue
+      // room to move this way: up to 9 m; short gaps are allowed (penalised) so a cornered bot still moves
+      const free = this.freeLen(pos, cx, cy, 9)
+      if (free > maxFree) { maxFree = free; maxFreeDir = [cx, cy] }
+      if (free < 3) continue
       const along = Math.cos(a - toT) // +1 toward target
       const side = Math.sin(a - toT) // +1 = left of the target line
       let s = radial * along * 2 + side * j * 1.2 - (radial === 0 ? Math.abs(along) * 0.6 : 0)
@@ -902,9 +910,29 @@ export class Bot {
       const zr = dist2(z.center, [nx, ny])
       if (zr > z.radius - 8) s -= 3
       if (dist2(z.next_center, [nx, ny]) > z.next_radius && dist2(z.next_center, pos) > z.next_radius * 0.9) s -= Math.cos(a - Math.atan2(z.next_center[1] - pos[1], z.next_center[0] - pos[0])) < 0 ? 1.5 : 0
+      s -= (9 - free) * 0.3
       if (s > bs) { bs = s; best = [cx, cy] }
     }
+    // cornered (no direction with 3 m of room): take the roomiest direction, or walk back onto the nav grid
+    if (bs === -Infinity) {
+      if (maxFree > 0.5) return maxFreeDir
+      const n = this.nav.nearestWalkable(pos[0], pos[1], 6)
+      if (n >= 0) return dirTo(pos, [this.nav.nodeX(n), this.nav.nodeY(n)])
+    }
     return best
+  }
+
+  /** How far (≤ len m) the mech can move along (cx, cy) with clearance, staying on the connected map. */
+  private freeLen(pos: V3, cx: number, cy: number, len: number): number {
+    const nav = this.nav, r = this.r
+    let ok = 0
+    for (let s = 1.5; s <= len + 0.01; s += 1.5) {
+      const x = pos[0] + cx * s, y = pos[1] + cy * s
+      const c = r.cellOf(x, y)
+      if (c < 0 || nav.clear[c] < 2.6 || !nav.isMain(nav.nodeAt(x, y))) break
+      ok = s
+    }
+    return ok
   }
 
   /** Is there room for the mech to move `len` m along (cx, cy)? */
