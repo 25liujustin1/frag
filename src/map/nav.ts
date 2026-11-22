@@ -134,7 +134,7 @@ export class Nav {
    * A* from node s to node t, at most `budget` expansions. Returns the node path (s..t), or the
    * path to the expanded node closest to t when the budget runs out; null if s is invalid.
    */
-  astar(s: number, t: number, budget = 20000): { path: number[]; complete: boolean; expanded: number } | null {
+  astar(s: number, t: number, budget = 20000, plain = false): { path: number[]; complete: boolean; expanded: number } | null {
     if (s < 0 || !this.walk[s]) return null
     const gen = ++this.gen
     const nx = this.nx, tx = t % nx, ty = Math.floor(t / nx)
@@ -161,9 +161,9 @@ export class Nav {
         const vi = ui + di, vj = uj + dj
         if (vi < 0 || vj < 0 || vi >= nx || vj >= this.ny) continue
         const v = vj * nx + vi
-        if (!walk[v] || cl[v] === gen || this.clearN[v] < this.dynClear) continue
+        if (!walk[v] || cl[v] === gen || (!plain && this.clearN[v] < this.dynClear)) continue
         if (di !== 0 && dj !== 0 && (!walk[uj * nx + vi] || !walk[vj * nx + ui])) continue // no corner cutting
-        const ng = g[u] + STEP[k] * (1 + cost[v] + ec[v] + tc[v])
+        const ng = g[u] + (plain ? STEP[k] : STEP[k] * (1 + cost[v] + ec[v] + tc[v]))
         if (st[v] !== gen || ng < g[v]) {
           st[v] = gen; g[v] = ng; par[v] = u
           this.push(v, ng + h(v))

@@ -1,5 +1,5 @@
 {
-  "name": "mr-v11r",
+  "name": "mr-v11s",
   "upgrades": [
     "armor",
     "plating",
@@ -134,7 +134,7 @@
   "ffaCloseRange": 60,
   "ffaEndgameAlive": 4,
   "ffaEscapeHp": 0.35,
-  "farmNpc": true,
+  "farmNpc": false,
   "farmStopT": 180,
   "farmMinHp": 0.6,
   "farmQuiet": 8,
@@ -299,7 +299,15 @@
   "passiveNear": 80,
   "passiveClosing": 30,
   "climbStall": 3,
-  "recoverHp": 0,
+  "recoverHp": 0.6,
   "recoverHitT": 4,
-  "passiveSplit": false
+  "passiveSplit": false,
+  "recoverOdds": 3,
+  "crateCalmT": 8,
+  "huntPath": false,
+  "huntMemT": 30,
+  "huntMax": 3,
+  "huntBudget": 6000,
+  "huntPathW": 2,
+  "huntSpotW": 1
 }

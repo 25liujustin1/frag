@@ -54,6 +54,9 @@ export class Bot {
   private retreating = false
   private escaping = false
   private curTarget = -1
+  private huntCost: Float32Array | null = null
+  private huntNodes: number[] = []
+  private recoverSeenT = -99
   private recovering = false
   private climbStillT = -1
   private myPos: V3 = [0, 0, 0]
@@ -172,6 +175,39 @@ export class Bot {
     this.threatCostT = obs.t
     for (const n of this.threatNodes) nav.threatCost[n] = 0
     this.threatNodes = []
+    // hunter-path prediction: the routes recently seen hostiles would take to reach us are dangerous corridors
+    if (P.huntPath) {
+      if (!this.huntCost) this.huntCost = new Float32Array(nav.nx * nav.ny)
+      for (const n of this.huntNodes) this.huntCost[n] = 0
+      this.huntNodes = []
+      const me0 = obs.self.pos, need = nav.dynClear
+      nav.dynClear = 0
+      const goal = nav.nearestWalkable(me0[0], me0[1], 6)
+      nav.dynClear = need
+      if (goal >= 0) {
+        const hs = [...this.tracks.values()].filter((tr) => tr.id < 100 && !this.isPassive(tr.id) && obs.t - tr.seenT < P.huntMemT && dist2(tr.pos, me0) < 320 && dist2(tr.pos, me0) > 25)
+          .sort((a, b) => b.seenT - a.seenT).slice(0, P.huntMax)
+        for (const tr of hs) {
+          const st = nav.nearestWalkable(tr.pos[0], tr.pos[1], 6)
+          if (st < 0) continue
+          const res = nav.astar(st, goal, P.huntBudget, true)
+          if (!res) continue
+          const w = P.huntPathW * (1 - (obs.t - tr.seenT) / P.huntMemT)
+          for (const n of res.path) {
+            const nxp = nav.nodeX(n), nyp = nav.nodeY(n)
+            if (Math.hypot(nxp - me0[0], nyp - me0[1]) < 20) continue // the end of every route is us
+            const I0 = n % nav.nx, J0 = (n - I0) / nav.nx
+            for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+              const I = I0 + i, J = J0 + j
+              if (I < 0 || J < 0 || I >= nav.nx || J >= nav.ny) continue
+              const m = J * nav.nx + I
+              if (w > this.huntCost[m]) { if (this.huntCost[m] === 0) this.huntNodes.push(m); this.huntCost[m] = w }
+            }
+          }
+        }
+        for (const m of this.huntNodes) { nav.threatCost[m] += this.huntCost[m]; this.threatNodes.push(m) }
+      }
+    }
     const eyes = [...this.tracks.values()].filter((tr) => tr.id < 100 && obs.t - tr.seenT < (tr.hitUsT > 0 ? P.eyesHitT : 10) && !this.isPassive(tr.id)).map((tr) => [tr.pos[0], tr.pos[1], tr.pos[2] + 8])
     const lights = this.lightCarriers(obs.t)
     if (!eyes.length && !lights.length) return
@@ -473,7 +509,10 @@ export class Bot {
     this.gunOnly = gunOnly
     this.hasLight = iLight >= 0
     const needWeapon = (iLaser < 0 && t < P.searchStopT) || (gunOnly && t < P.gunOnlyStopT)
-    if (!target && !this.winHealing && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
+    // crates only when it's really calm: not retreating, no hit and no hostile seen for a while
+    const crateCalm = P.crateCalmT <= 0 || (!this.retreating && t - this.lastDmgT > P.crateCalmT &&
+      ![...this.tracks.values()].some((tr) => tr.id < 100 && !this.isPassive(tr.id) && t - tr.seenT < P.crateCalmT))
+    if (!target && !this.winHealing && crateCalm && t < (gunOnly ? Math.max(P.crateStopT, P.gunOnlyStopT) : P.crateStopT) && iGun >= 0 && !underFire) {
       let bd = needWeapon ? P.crateShootRange : P.crateRange
       for (const c of obs.crates) {
         const d = dist2(c.pos, pos)
@@ -666,8 +705,10 @@ export class Bot {
         band = tw.includes("lightning") && iLight < 0 ? [Math.max(band[0], 50), Math.max(band[1], 70)] : [Math.min(band[0], 15), Math.min(band[1], P.pushRange)]
       }
       // recover in cover: hurt, and this bot isn't hitting us -> don't step out for a shot; hold fire so regen can run
-      const recovering = P.recoverHp > 0 && !pushing && me.hp < me.max_hp * P.recoverHp && t - this.lastDmgT > P.recoverHitT
+      // ...unless we'd clearly win this one: odds = (time until we die) / (time until it dies)
+      const recovering = P.recoverHp > 0 && !pushing && me.hp < me.max_hp * P.recoverHp && t - this.lastDmgT > P.recoverHitT && odds < P.recoverOdds
       this.recovering = recovering
+      if (recovering) this.recoverSeenT = t
       const readyR = ready && !recovering
       move = this.combatDir(pos, target.pos as V3, band[0], band[1], obs, readyR || pushing)
       if (P.posScore) {
@@ -1698,6 +1739,7 @@ export class Bot {
           for (const th of threats) { if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue; cx += th[0]; cy += th[1]; n++ }
           if (n) { cx /= n; cy /= n; const gain = Math.hypot(x - cx, y - cy) - Math.hypot(pos[0] - cx, pos[1] - cy); s -= P.kiteDriftW * clamp(gain / 32, -1, 1) }
         }
+        if (P.huntPath && this.huntCost) { const hn = this.nav.nodeAt(x, y); if (hn >= 0) s += P.huntSpotW * this.huntCost[hn] }
         // separate the bots: stay away from every enemy except the one we're fighting, so they come one at a time
         if (P.separateW > 0) for (const th of threats) {
           if (Math.hypot(th[0] - tc[0], th[1] - tc[1]) < 8) continue // that's the target
